@@ -458,4 +458,91 @@ class BatchController extends CoreEntityController
             }
         }
     }
+
+    public function fetchwebminerbalancesAction()
+    {
+        if (isset($_REQUEST['authkey'])) {
+            if (strip_tags($_REQUEST['authkey']) == CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $this->layout('layout/json');
+
+                $oMinerTbl = $this->getCustomTable('faucet_miner');
+                $oUsrTbl = $this->getCustomTable('user');
+                $sBaseUrl = 'https://webminepool.com/api/'.CoreEntityController::$aGlobalSettings['webminepool-apikey'];
+
+                $sCall = $sBaseUrl.'/users/';
+
+                $sJson = file_get_contents($sCall);
+
+                $oJson = json_decode($sJson);
+
+                if(count($oJson->users) > 0) {
+                    foreach($oJson->users as $oUsr) {
+                        $oMinerUser = false;
+                        echo 'check user .'.$oUsr->name;
+                        if(is_numeric($oUsr->name)) {
+                            try {
+                                $oMinerUser = $this->oTableGateway->getSingle($oUsr->name);
+                            } catch(\RuntimeException $e) {
+                                # user not found - ignore
+                            }
+                        }
+                        if($oMinerUser) {
+                            $oLastEntryWh = new Where();
+                            $oLastEntryWh->equalTo('user_idfs', $oMinerUser->getID());
+                            $oLastEntryWh->like('coin', 'wmp');
+
+                            $oLastSel = new Select($oMinerTbl->getTable());
+                            $oLastSel->where($oLastEntryWh);
+                            $oLastSel->order('date DESC');
+                            $oLastSel->limit(1);
+
+                            $fCoins = 0;
+                            $oLastEntry = $oMinerTbl->selectWith($oLastSel);
+                            if(count($oLastEntry) == 0) {
+                                $fCoins = round((float)($oUsr->hashes/1000000)*15,2);
+                                if($fCoins > 0) {
+                                    $oMinerTbl->insert([
+                                        'user_idfs' => $oMinerUser->getID(),
+                                        'rating' => $oUsr->hashes,
+                                        'shares' => $oUsr->hashes,
+                                        'amount_coin' => $fCoins,
+                                        'date' => date('Y-m-d H:i:s', time()),
+                                        'coin' => 'wmp',
+                                        'pool' => 'webminepool',
+                                    ]);
+                                    echo 'webminer added';
+                                }
+
+                            } else {
+                                $oLastEntry = $oLastEntry->current();
+                                $iNewShares = $oUsr->hashes-$oLastEntry->rating;
+                                $fCoins = round((float)($iNewShares/1000000)*2000,2);
+
+                                if($fCoins > 0) {
+                                    $oMinerTbl->insert([
+                                        'user_idfs' => $oUsr->name,
+                                        'rating' => $oUsr->hashes,
+                                        'shares' => $iNewShares,
+                                        'amount_coin' => $fCoins,
+                                        'date' => date('Y-m-d H:i:s', time()),
+                                        'coin' => 'wmp',
+                                        'pool' => 'webminepool',
+                                    ]);
+                                }
+                                echo 'webminer updated';
+                            }
+                            if($fCoins > 0) {
+                                $fCurrentBalance = $oUsrTbl->select(['User_ID' => $oMinerUser->getID()])->current()->token_balance;
+                                $oUsrTbl->update([
+                                    'token_balance' => $fCurrentBalance+$fCoins,
+                                ],'User_ID = '.$oMinerUser->getID());
+                            }
+                        }
+                    }
+                }
+
+                return false;
+            }
+        }
+    }
 }
