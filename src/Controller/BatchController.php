@@ -72,7 +72,10 @@ class BatchController extends CoreEntityController
     {
         $this->layout('layout/json');
 
-        return $this->redirect()->toRoute('home');
+
+        echo 'Welcome to Faucet Batch Server';
+
+        return false;
     }
 
     /**
@@ -314,5 +317,87 @@ class BatchController extends CoreEntityController
         return false;
     }
 
+    public function statsAction()
+    {
+        if (isset($_REQUEST['authkey'])) {
+            if (strip_tags($_REQUEST['authkey']) == 'server01batch') {
+                $this->layout('layout/json');
 
+                $oUserTbl = new TableGateway('user', CoreEntityController::$oDbAdapter);
+                $oUserMetricsTbl = new TableGateway('core_metric', CoreEntityController::$oDbAdapter);
+
+                $aUsersActive = $oUserTbl->select(['theme' => 'faucet']);
+                $bTotalBalance = 0;
+                foreach ($aUsersActive as $oUsr) {
+                    $bTotalBalance += $oUsr->token_balance;
+                }
+
+                $oStatsTbl = new TableGateway('core_statistic', CoreEntityController::$oDbAdapter);
+
+                $oWh = new Where();
+                $oWh->like('stats_key', 'tokenbalance-daily');
+                $oWh->like('date', date('Y-m-d', time()) . '%');
+                $oCheck = $oStatsTbl->select($oWh);
+                if (count($oCheck) == 0) {
+                    $oStatsTbl->insert([
+                        'stats_key' => 'tokenbalance-daily',
+                        'data' => $bTotalBalance,
+                        'date' => date('Y-m-d H:i:s', time()),
+                    ]);
+                } else {
+                    $oStatsTbl->update([
+                        'data' => $bTotalBalance,
+                        'date' => date('Y-m-d H:i:s', time()),
+                    ], $oWh);
+                }
+
+                $oWh = new Where();
+                $oWh->like('stats_key', 'userstats-daily');
+                $oWh->like('date', date('Y-m-d', time()) . '%');
+                $oCheck = $oStatsTbl->select($oWh);
+                if (count($oCheck) == 0) {
+                    $oStatsTbl->insert([
+                        'stats_key' => 'userstats-daily',
+                        'data' => count($aUsersActive),
+                        'date' => date('Y-m-d H:i:s', time()),
+                    ]);
+                } else {
+                    $oStatsTbl->update([
+                        'data' => count($aUsersActive),
+                        'date' => date('Y-m-d H:i:s', time()),
+                    ], $oWh);
+                }
+
+                $oWh = new Where();
+                $oWh->like('action', 'login');
+                $oWh->like('type', 'success');
+                $oWh->like('date', date('Y-m-d', time()) . '%');
+                $oLoginsToday = $oUserMetricsTbl->select($oWh);
+                $iLoginsToday = count($oLoginsToday);
+
+                $oWh = new Where();
+                $oWh->like('stats_key', 'logins-daily');
+                $oWh->like('date', date('Y-m-d', time()) . '%');
+                $oCheck = $oStatsTbl->select($oWh);
+                if (count($oCheck) == 0) {
+                    $oStatsTbl->insert([
+                        'stats_key' => 'logins-daily',
+                        'data' => $iLoginsToday,
+                        'date' => date('Y-m-d H:i:s', time()),
+                    ]);
+                } else {
+                    $oStatsTbl->update([
+                        'data' => $iLoginsToday,
+                        'date' => date('Y-m-d H:i:s', time()),
+                    ], $oWh);
+                }
+
+                echo 'done';
+
+                return false;
+            }
+        }
+
+        return $this->redirect()->toRoute('home');
+    }
 }
