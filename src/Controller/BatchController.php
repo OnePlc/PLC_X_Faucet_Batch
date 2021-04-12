@@ -90,7 +90,7 @@ class BatchController extends CoreEntityController
         if(!isset($_REQUEST['authkey'])) {
             $bCheck = false;
         } else {
-            if($_REQUEST['authkey'] != 'SERVERBATCH') {
+            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
                 $bCheck = false;
             }
         }
@@ -226,7 +226,7 @@ class BatchController extends CoreEntityController
         if(!isset($_REQUEST['authkey'])) {
             $bCheck = false;
         } else {
-            if($_REQUEST['authkey'] != 'SERVERBATCH') {
+            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
                 $bCheck = false;
             }
         }
@@ -320,7 +320,7 @@ class BatchController extends CoreEntityController
     public function statsAction()
     {
         if (isset($_REQUEST['authkey'])) {
-            if (strip_tags($_REQUEST['authkey']) == 'server01batch') {
+            if (strip_tags($_REQUEST['authkey']) == CoreEntityController::$aGlobalSettings['batch-serverkey']) {
                 $this->layout('layout/json');
 
                 $oUserTbl = new TableGateway('user', CoreEntityController::$oDbAdapter);
@@ -399,5 +399,63 @@ class BatchController extends CoreEntityController
         }
 
         return $this->redirect()->toRoute('home');
+    }
+
+    public function fetchcmcdataAction()
+    {
+        if (isset($_REQUEST['authkey'])) {
+            if (strip_tags($_REQUEST['authkey']) == CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $this->layout('layout/json');
+
+                $url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest';
+                $parameters = [
+                    'slug' => 'bitcoin,ethereum,ethereum-classic,ravencoin,groestlcoin,bitcoin-cash,dogecoin,binance-coin,litecoin',
+                ];
+
+                $headers = [
+                    'Accepts: application/json',
+                    'X-CMC_PRO_API_KEY: '.CoreEntityController::$aGlobalSettings['cmc-api-key'],
+                ];
+                $qs = http_build_query($parameters); // query string encode the parameters
+                $request = "{$url}?{$qs}"; // create the request URL
+
+                $curl = curl_init(); // Get cURL resource
+                // Set cURL options
+                curl_setopt_array($curl, array(
+                    CURLOPT_URL => $request,            // set the request URL
+                    CURLOPT_HTTPHEADER => $headers,     // set the headers
+                    CURLOPT_RETURNTRANSFER => 1         // ask for raw response instead of bool
+                ));
+
+                $response = curl_exec($curl); // Send the request, save the response
+                //print_r(json_decode($response)); // print json decoded response
+                curl_close($curl); // Close request
+
+                $oJson = json_decode($response);
+                if ($oJson->status->error_code == 0) {
+                    $oWallTbl = $this->getCustomTable('faucet_wallet');
+
+                    foreach ($oJson->data as $oCoin) {
+                        $sName = $oCoin->name;
+                        $fCurrentPrice = $oCoin->quote->USD->price;
+                        $fChange24h = $oCoin->quote->USD->percent_change_24h;
+
+                        if (is_numeric($fCurrentPrice) && $fCurrentPrice != '') {
+                            $oWallTbl->update([
+                                'dollar_val' => (float)$fCurrentPrice,
+                                'change_24h' => (float)$fChange24h,
+                                'last_update' => date('Y-m-d H:i:s', time()),
+                            ], ['coin_sign' => $oCoin->symbol]);
+                        }
+                    }
+
+                    echo 'price update done';
+                } else {
+                    echo 'got error: ' . $oJson->status->error_code;
+                }
+
+                return false;
+            }
+        }
     }
 }
