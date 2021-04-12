@@ -34,6 +34,20 @@ return [
                     ],
                 ],
             ],
+            'faucet-batch' => [
+                'type'    => Segment::class,
+                'options' => [
+                    'route' => '/batch[/:action[/:id]]',
+                    'constraints' => [
+                        'action' => '[a-zA-Z][a-zA-Z0-9_-]*',
+                        'id'     => '[a-zA-Z0-9_-]+',
+                    ],
+                    'defaults' => [
+                        'controller' => Controller\BatchController::class,
+                        'action'     => 'index',
+                    ],
+                ],
+            ],
         ],
     ],
 
