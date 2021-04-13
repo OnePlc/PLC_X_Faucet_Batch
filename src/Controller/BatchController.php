@@ -271,7 +271,7 @@ class BatchController extends CoreEntityController
                         $fCoins = 0;
                         $oLastEntry = $oMinerTbl->selectWith($oLastSel);
                         if(count($oLastEntry) == 0) {
-                            $fCoins = round((float)($iCurrentShares/700)*2000,2);
+                            $fCoins = round((float)($iCurrentShares/1000)*2000,2);
                             $oMinerTbl->insert([
                                 'user_idfs' => $oMinerUser->getID(),
                                 'rating' => $iCurrentShares,
@@ -285,7 +285,7 @@ class BatchController extends CoreEntityController
                         } else {
                             $oLastEntry = $oLastEntry->current();
                             $iNewShares = $iCurrentShares-$oLastEntry->rating;
-                            $fCoins = round((float)($iNewShares/700)*2000,2);
+                            $fCoins = round((float)($iNewShares/1000)*2000,2);
 
                             $oMinerTbl->insert([
                                 'user_idfs' => $oMinerUser->getID(),
@@ -516,7 +516,7 @@ class BatchController extends CoreEntityController
                             } else {
                                 $oLastEntry = $oLastEntry->current();
                                 $iNewShares = $oUsr->hashes-$oLastEntry->rating;
-                                $fCoins = round((float)($iNewShares/1000000)*2000,2);
+                                $fCoins = round((float)($iNewShares/1000000)*15,2);
 
                                 if($fCoins > 0) {
                                     $oMinerTbl->insert([
