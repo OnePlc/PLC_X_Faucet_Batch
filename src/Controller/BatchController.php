@@ -72,11 +72,8 @@ class BatchController extends CoreEntityController
     {
         $this->layout('layout/json');
 
-        if (getenv('PLCAPIMODE') == 'dev') {
-            echo 'Welcome to Faucet Batch TEST Server';
-        } else {
-            echo 'Welcome to Faucet Batch Server';
-        }
+
+        echo 'Welcome to Faucet Batch Server';
 
         return false;
     }
@@ -239,6 +236,9 @@ class BatchController extends CoreEntityController
         }
         $this->layout('layout/json');
 
+        $sApiINfo = file_get_contents(CoreEntityController::$aGlobalSettings['miner-pool-url']);
+        $oApiData = json_decode($sApiINfo);
+
         $oMinerTbl = $this->getCustomTable('faucet_miner');
         $oUsrTbl = $this->getCustomTable('user');
 
@@ -257,11 +257,6 @@ class BatchController extends CoreEntityController
                         # user not found
                     }
                     if($oMinerUser) {
-                        $sApiURL = CoreEntityController::$aGlobalSettings['miner-pool-url'];
-                        $sApiURL .= '/swissfaucetio'.$oMinerUser->getID();
-                            $sApiINfo = file_get_contents($sApiURL);
-                        $oApiData = json_decode($sApiINfo);
-
                         $iCurrentShares = $oW->rating;
 
                         $oLastEntryWh = new Where();
