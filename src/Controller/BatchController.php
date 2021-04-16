@@ -72,8 +72,11 @@ class BatchController extends CoreEntityController
     {
         $this->layout('layout/json');
 
-
-        echo 'Welcome to Faucet Batch Server';
+        if (getenv('PLCAPIMODE') == 'dev') {
+            echo 'Welcome to Faucet Batch TEST Server';
+        } else {
+            echo 'Welcome to Faucet Batch Server';
+        }
 
         return false;
     }
@@ -236,9 +239,6 @@ class BatchController extends CoreEntityController
         }
         $this->layout('layout/json');
 
-        $sApiINfo = file_get_contents(CoreEntityController::$aGlobalSettings['miner-pool-url']);
-        $oApiData = json_decode($sApiINfo);
-
         $oMinerTbl = $this->getCustomTable('faucet_miner');
         $oUsrTbl = $this->getCustomTable('user');
 
@@ -257,6 +257,11 @@ class BatchController extends CoreEntityController
                         # user not found
                     }
                     if($oMinerUser) {
+                        $sApiURL = CoreEntityController::$aGlobalSettings['miner-pool-url'];
+                        $sApiURL .= '/swissfaucetio'.$oMinerUser->getID();
+                            $sApiINfo = file_get_contents($sApiURL);
+                        $oApiData = json_decode($sApiINfo);
+
                         $iCurrentShares = $oW->rating;
 
                         $oLastEntryWh = new Where();
@@ -267,6 +272,10 @@ class BatchController extends CoreEntityController
                         $oLastSel->where($oLastEntryWh);
                         $oLastSel->order('date DESC');
                         $oLastSel->limit(1);
+
+                        if($iCurrentShares < 0) {
+                            $iCurrentShares = 0;
+                        }
 
                         $fCoins = 0;
                         $oLastEntry = $oMinerTbl->selectWith($oLastSel);
@@ -285,7 +294,12 @@ class BatchController extends CoreEntityController
                         } else {
                             $oLastEntry = $oLastEntry->current();
                             $iNewShares = $iCurrentShares-$oLastEntry->rating;
-                            $fCoins = round((float)($iNewShares/1000)*2000,2);
+                            $fCoins = 0;
+                            if($iNewShares > 0) {
+                                $fCoins = round((float)($iNewShares/1000)*2000,2);
+                            } else {
+                                $iNewShares = 0;
+                            }
 
                             $oMinerTbl->insert([
                                 'user_idfs' => $oMinerUser->getID(),
@@ -544,5 +558,112 @@ class BatchController extends CoreEntityController
                 return false;
             }
         }
+    }
+
+    /**
+     * Parse E-Mail for Support inqueries
+     *
+     * @return false
+     * @since 1.0.3
+     */
+    public function parsemailAction()
+    {
+        if (isset($_REQUEST['authkey'])) {
+            if (strip_tags($_REQUEST['authkey']) == CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $this->layout('layout/json');
+
+                $aMails = glob('/home/mailbatch/queue/*');
+
+                $oRequestTbl = $this->getCustomTable('user_request');
+                if(count($aMails) > 0) {
+                    foreach($aMails as $sMail) {
+                        $oReqCheck = $oRequestTbl->select([
+                            'mail_name' => basename($sMail),
+                        ]);
+                        if(count($oReqCheck) > 0) {
+                            echo 'mail already parsed';
+                            continue;
+                        }
+                        $handle = fopen($sMail, "r");
+                        if ($handle) {
+                            $sContent = '';
+                            $bContentStart = false;
+                            while (($line = fgets($handle)) !== false) {
+                                // process the line read.
+                                // look out for special headers
+                                if (preg_match("/^Subject: (.*)/", $line, $matches)) {
+                                    $subject = $matches[1];
+                                }
+                                if (preg_match("/^From: (.*)/", $line, $matches)) {
+                                    $from = $matches[1];
+                                }
+                                if (preg_match("/^To: (.*)/", $line, $matches)) {
+                                    $to = $matches[1];
+                                }
+                                if($bContentStart) {
+                                    $bEndContent = stripos($line, 'support@swissfaucet.io');
+                                    if($bEndContent === false) {
+                                        $bSkip = stripos($line, 'Content-Transfer-Encoding:');
+
+                                        if($line != '' && $line != "\n" && $bSkip === false) {
+                                            $sContent .= strip_tags($line);
+                                        }
+                                    } else {
+                                        $bContentStart = false;
+                                    }
+                                }
+                                if (preg_match("/^Content-Type: text\/plain(.*)/", $line, $matches)) {
+                                    $bContentStart = true;
+                                    echo 'start content';
+                                }
+                            }
+
+                            fclose($handle);
+
+                            $sEmailCheck = $from;
+                            $bHasName = stripos($sEmailCheck,'<');
+                            if($bHasName === false) {
+                                echo $sEmailCheck;
+                            } else {
+                                $bMailEnd = stripos('>',$sEmailCheck);
+                                $sEmailCheck = substr($sEmailCheck,$bHasName+1,strlen($sEmailCheck)-($bHasName+1)-1);
+
+                                try {
+                                    $oExistingOuser = $this->oTableGateway->getSingle($sEmailCheck, 'email');
+                                    echo 'user found - add to support inbox';
+                                    echo $sContent;
+
+                                    $oReqCheck = $oRequestTbl->select([
+                                        'user_idfs' => $oExistingOuser->getID(),
+                                        'state' => 'new',
+                                    ]);
+                                    if(count($oReqCheck) == 0) {
+                                        $oRequestTbl->insert([
+                                            'user_idfs' => $oExistingOuser->getID(),
+                                            'message' => $sContent,
+                                            'name' => $oExistingOuser->getLabel(),
+                                            'date' => date('Y-m-d H:i:s', time()),
+                                            'state' => 'new',
+                                            'reply' => '',
+                                            'reply_user_idfs' => 0,
+                                            'mail_name' => basename($sMail),
+                                        ]);
+                                    } else {
+                                        # send email "you already have an open request please wait
+                                    }
+                                } catch(\RuntimeException $e) {
+                                    echo 'user not found - add to default inbox';
+                                }
+                            }
+                        } else {
+                            // error opening the file.
+                        }
+                    }
+                }
+                return false;
+            }
+        }
+
+        return $this->redirect()->toRoute('home');
     }
 }
