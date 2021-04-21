@@ -661,4 +661,47 @@ class BatchController extends CoreEntityController
 
         return $this->redirect()->toRoute('home');
     }
+
+    public function appstatsAction()
+    {
+        $this->layout('layout/json');
+
+        $oMetricTbl = $this->getCustomTable('core_metric');
+        $aAppMetrics = [];
+        $oMetricSel = new Select($oMetricTbl->getTable());
+        $oMetricWh = new Where();
+        $oMetricWh->like('action', 'app-%');
+        $oMetricWh->greaterThanOrEqualTo('date', date('Y-m-d H:i:s',strtotime('-24 hours')));
+        $oMetricSel->where($oMetricWh);
+        $oAppMetricsDB = $oMetricTbl->selectWith($oMetricSel);
+        foreach($oAppMetricsDB as $oMet) {
+            if(!array_key_exists($oMet->action,$aAppMetrics)) {
+                $aAppMetrics[$oMet->action] = ['success' => 0,'error' => 0];
+            }
+            $aAppMetrics[$oMet->action][$oMet->type]++;
+        }
+
+
+        $oStatsTbl = new TableGateway('core_statistic', CoreEntityController::$oDbAdapter);
+        $oCheckWh = new Where();
+        $oCheckWh->like('stat-key', 'appmetrics-daily');
+        $oCheckWh->like('date', date('Y-m-d', time()).'%');
+        $oStatsCheck = $oStatsTbl->select($oCheckWh);
+
+        if(count($oStatsCheck) == 0) {
+            $oStatsTbl->insert([
+                'stat-key' => 'appmetrics-daily',
+                'date' => date('Y-m-d H:i:s', time()),
+                'stat-data' => json_encode($aAppMetrics),
+            ]);
+        } else {
+            $oStatsTbl->update([
+                'stat-data' => json_encode($aAppMetrics),
+            ],$oCheckWh);
+        }
+
+        echo 'done';
+
+        return false;
+    }
 }
