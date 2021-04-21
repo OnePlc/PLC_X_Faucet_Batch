@@ -684,19 +684,19 @@ class BatchController extends CoreEntityController
 
         $oStatsTbl = new TableGateway('core_statistic', CoreEntityController::$oDbAdapter);
         $oCheckWh = new Where();
-        $oCheckWh->like('stat-key', 'appmetrics-daily');
+        $oCheckWh->like('stats_key', 'appmetrics-daily');
         $oCheckWh->like('date', date('Y-m-d', time()).'%');
         $oStatsCheck = $oStatsTbl->select($oCheckWh);
 
         if(count($oStatsCheck) == 0) {
             $oStatsTbl->insert([
-                'stat-key' => 'appmetrics-daily',
+                'stats_key' => 'appmetrics-daily',
                 'date' => date('Y-m-d H:i:s', time()),
-                'stat-data' => json_encode($aAppMetrics),
+                'data' => json_encode($aAppMetrics),
             ]);
         } else {
             $oStatsTbl->update([
-                'stat-data' => json_encode($aAppMetrics),
+                'data' => json_encode($aAppMetrics),
             ],$oCheckWh);
         }
 
