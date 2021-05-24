@@ -23,6 +23,7 @@ use Laminas\View\Model\ViewModel;
 use Laminas\Db\Adapter\AdapterInterface;
 use Laminas\Db\Sql\Select;
 use Laminas\Db\Sql\Where;
+use Laminas\Db\Sql\Expression;
 use Laminas\Db\TableGateway\TableGateway;
 use Laminas\Http\ClientStatic;
 use OnePlace\User\Model\UserTable;
@@ -78,12 +79,6 @@ class BatchController extends CoreEntityController
         return false;
     }
 
-    /**
-     * Generate Stats for Hall of Fame
-     *
-     * @return false
-     * @since 1.0.0
-     */
     public function halloffameAction()
     {
         $bCheck = true;
@@ -110,85 +105,98 @@ class BatchController extends CoreEntityController
         $oGameTbl = $this->getCustomTable('faucet_game_match');
         $oMinerTbl = $this->getCustomTable('faucet_miner');
 
-        $oWh = new Where();
-        $oWh->greaterThan('xp_level', 1);
-        $aUsers = $this->fetchCustomTable('user', $oWh);
+        $aIncomeByUserID = [];
 
-
-        $aSkipUsers = ['335874987' => true];
-        $aUsersByIncome = [];
-        $aUsersByID = [];
-        foreach($aUsers as $oUsr) {
-            if(array_key_exists($oUsr->User_ID,$aSkipUsers)) {
-                continue;
+        $oWhPTC = new Where();
+        $oWhPTC->greaterThanOrEqualTo('date_claimed', date('Y-m-d H:i:s', strtotime('first day of this month')));
+        $oPTCDone = $oAdsDoneTbl->select($oWhPTC)->current();
+        $aPTCRewards = [];
+        $oPTCInfoDB = $oAdsTbl->select();
+        foreach($oPTCInfoDB as $oPTCInfo) {
+            $aPTCRewards[$oPTCInfo->PTC_ID] = $oPTCInfo->reward;
+        }
+        foreach($oPTCDone as $oPTC) {
+            if(!array_key_exists($oPTC->user_idfs,$aIncomeByUserID)) {
+                $aIncomeByUserID[$oPTC->user_idfs] = 0;
             }
-            $fTotalIncome = 0;
-
-            $oWh = new Where();
-            $oWh->equalTo('user_idfs', $oUsr->User_ID);
-
-            $oPtcsDone = $oAdsDoneTbl->select($oWh);
-            if(count($oPtcsDone) > 0) {
-                foreach($oPtcsDone as $oPtcD) {
-                    $oPtc = $oAdsTbl->select(['PTC_ID' => $oPtcD->ptc_idfs])->current();
-                    $fTotalIncome+=$oPtc->reward;
-                }
+            if(array_key_exists($oPTC->ptc_idfs,$aPTCRewards)) {
+                $aIncomeByUserID[$oPTC->user_idfs]+=$aPTCRewards[$oPTC->user_idfs];
             }
-
-            $oShortsDone = $oMyLinksDoneTbl->select($oWh);
-            if(count($oShortsDone) > 0) {
-                foreach($oShortsDone as $oShD) {
-                    $oSh = $oProvidersTbl->select(['Shortlink_ID' => $oShD->shortlink_idfs])->current();
-                    $fTotalIncome+=$oSh->reward;
-                }
-            }
-
-            $oWallsDone = $oWallsDoneTbl->select($oWh);
-            if(count($oWallsDone) > 0) {
-                foreach($oWallsDone as $oWallD) {
-                    $fTotalIncome+=$oWallD->amount;
-                }
-            }
-
-            $oClaimsDone = $oClaimTbl->select($oWh);
-            if(count($oClaimsDone) > 0) {
-                foreach($oClaimsDone as $oClaimD) {
-                    if($oClaimD->mode == 'coins') {
-                        $fTotalIncome+=$oClaimD->amount;
-                    }
-                }
-            }
-
-            $oWhWin = new Where();
-            $oWhWin->equalTo('winner_idfs', $oUsr->User_ID);
-            $oGamesWon = $oGameTbl->select($oWhWin);
-            if(count($oGamesWon) > 0) {
-                foreach($oGamesWon as $oGameD) {
-                    $fTotalIncome+=$oGameD->amount_bet;
-                }
-            }
-
-            $oMinerShares = $oMinerTbl->select($oWh);
-            if(count($oMinerShares) > 0) {
-                foreach($oMinerShares as $oShare) {
-                    $fTotalIncome+=$oShare->amount_coin;
-                }
-            }
-
-            $aUsersByIncome[$oUsr->User_ID] = $fTotalIncome;
-            $aUsersByID[$oUsr->User_ID] = $oUsr->username;
         }
 
-        arsort($aUsersByIncome);
+        $oWhSh = new Where();
+        $oWhSh->greaterThanOrEqualTo('date_claimed', date('Y-m-d H:i:s', strtotime('first day of this month')));
+        $oShDone = $oMyLinksDoneTbl->select($oWhSh);
+        $aShRewards = [];
+        $oShInfoDB = $oProvidersTbl->select();
+        foreach($oShInfoDB as $oShInfo) {
+            $aShRewards[$oShInfo->Shortlink_ID] = $oShInfo->reward;
+        }
+        foreach($oShDone as $oSh) {
+            if(!array_key_exists($oSh->user_idfs,$aIncomeByUserID)) {
+                $aIncomeByUserID[$oSh->user_idfs] = 0;
+            }
+            if(array_key_exists($oSh->shortlink_idfs,$aShRewards)) {
+                $aIncomeByUserID[$oSh->user_idfs]+=$aShRewards[$oSh->shortlink_idfs];
+            }
+        }
+
+        $oWhOff = new Where();
+        $oWhOff->greaterThanOrEqualTo('date_completed', date('Y-m-d H:i:s', strtotime('first day of this month')));
+        $oOffDone = $oWallsDoneTbl->select($oWhOff);
+        foreach($oOffDone as $oOff) {
+            if(!array_key_exists($oOff->user_idfs,$aIncomeByUserID)) {
+                $aIncomeByUserID[$oOff->user_idfs] = 0;
+            }
+            $aIncomeByUserID[$oOff->user_idfs]+=$oOff->amount;
+        }
+
+        $oWhClaim = new Where();
+        $oWhClaim->greaterThanOrEqualTo('date', date('Y-m-d H:i:s', strtotime('first day of this month')));
+        $oClaimDone = $oClaimTbl->select($oWhClaim);
+        foreach($oClaimDone as $oCl) {
+            if(!array_key_exists($oCl->user_idfs,$aIncomeByUserID)) {
+                $aIncomeByUserID[$oCl->user_idfs] = 0;
+            }
+            $aIncomeByUserID[$oCl->user_idfs]+=$oCl->amount;
+        }
+
+        $oWhGame = new Where();
+        $oWhGame->greaterThanOrEqualTo('date_matched', date('Y-m-d H:i:s', strtotime('first day of this month')));
+        $oGameDone = $oGameTbl->select($oWhGame);
+        foreach($oGameDone as $oGame) {
+            if($oGame->winner_idfs == 0) {
+                continue;
+            }
+            if(!array_key_exists($oGame->winner_idfs,$aIncomeByUserID)) {
+                $aIncomeByUserID[$oGame->winner_idfs] = 0;
+            }
+            $aIncomeByUserID[$oGame->winner_idfs]+=$oGame->amount_bet;
+        }
+
+        $oWhMine = new Where();
+        $oWhMine->greaterThanOrEqualTo('date', date('Y-m-d H:i:s', strtotime('first day of this month')));
+        $oMineDone = $oMinerTbl->select($oWhMine);
+        foreach($oMineDone as $oMine) {
+            if($oMine->amount_coin == 0) {
+                continue;
+            }
+            if(!array_key_exists($oMine->user_idfs,$aIncomeByUserID)) {
+                $aIncomeByUserID[$oMine->user_idfs] = 0;
+            }
+            $aIncomeByUserID[$oMine->user_idfs]+=$oMine->amount_coin;
+        }
+
+        arsort($aIncomeByUserID);
 
         $aTopEarners = [];
 
         $iCount = 1;
-        foreach(array_keys($aUsersByIncome) as $iUsrID) {
+        foreach(array_keys($aIncomeByUserID) as $iUsrID) {
             if($iCount == 6) {
                 break;
             }
-            $aTopEarners[$iCount] = (object)['id' => $iUsrID,'coins' => $aUsersByIncome[$iUsrID]];
+            $aTopEarners[$iCount] = (object)['id' => $iUsrID,'coins' => $aIncomeByUserID[$iUsrID]];
             $iCount++;
         }
 
@@ -206,6 +214,7 @@ class BatchController extends CoreEntityController
         } else {
             $oStatsTbl->update([
                 'stat-data' => json_encode($aTopEarners),
+                'date' => date('Y-m-d H:i:s', time()),
             ],$oCheckWh);
         }
 
@@ -671,7 +680,7 @@ class BatchController extends CoreEntityController
         $oMetricSel = new Select($oMetricTbl->getTable());
         $oMetricWh = new Where();
         $oMetricWh->like('action', 'app-%');
-        $oMetricWh->greaterThanOrEqualTo('date', date('Y-m-d H:i:s',strtotime('-24 hours')));
+        $oMetricWh->greaterThanOrEqualTo('date', date('Y-m-d',time()).'%');
         $oMetricSel->where($oMetricWh);
         $oAppMetricsDB = $oMetricTbl->selectWith($oMetricSel);
         foreach($oAppMetricsDB as $oMet) {
@@ -697,11 +706,735 @@ class BatchController extends CoreEntityController
         } else {
             $oStatsTbl->update([
                 'data' => json_encode($aAppMetrics),
+                'date' => date('Y-m-d H:i:s', time()),
             ],$oCheckWh);
         }
 
         echo 'done';
 
         return false;
+    }
+
+    public function tokenstatsAction()
+    {
+        $this->layout('layout/json');
+
+        $oStatsTbl = new TableGateway('core_statistic', CoreEntityController::$oDbAdapter);
+        $oUsrTbl = new TableGateway('user', CoreEntityController::$oDbAdapter);
+
+        $rowset = $oUsrTbl->select(function(Select $select) {
+            $select->columns(array(
+                'sum' => new Expression('SUM(token_balance)')
+            ));
+            $select->where(array('theme' => 'faucet'));
+        });
+        $fBalance = $rowset->toArray()[0]['sum'];
+
+        $rowset = $oUsrTbl->select(function(Select $select) {
+            $oWh = new Where();
+            $oWh->NEST
+                ->notEqualTo('User_ID', 335874987)
+                ->AND
+                ->notEqualTo('User_ID', 335880436)
+                ->AND
+                ->notEqualTo('User_ID', 335877074)
+                ->AND
+                ->notEqualTo('User_ID', 335880700)
+                ->AND
+                ->notEqualTo('User_ID', 335875860)
+                ->AND
+                ->notEqualTo('User_ID', 335874988)
+                ->AND
+                ->notEqualTo('User_ID', 335875071)
+                ->UNNEST;
+            $oWh->like('theme', 'faucet');
+            $select->columns(array(
+                'sum' => new Expression('SUM(xp_level)')
+            ));
+            $select->where($oWh);
+        });
+        $fTotalLimitDB = $rowset->toArray()[0]['sum'];
+        $fTotalLimit = 1000*(1+((($fTotalLimitDB)-1)/10));
+
+        $rowset = $oUsrTbl->select(function(Select $select) {
+            $oWh = new Where();
+            $oWh->equalTo('User_ID', 1);
+            $oWh->or->equalTo('User_ID', 335874987);
+            $oWh->or->equalTo('User_ID', 335880436);
+            $oWh->or->equalTo('User_ID', 335877074);
+            $oWh->or->equalTo('User_ID', 335880700);
+            $oWh->or->equalTo('User_ID', 335875860);
+            $oWh->or->equalTo('User_ID', 335874988);
+            $oWh->or->equalTo('User_ID', 335875071);
+
+            $select->columns(array(
+                'sum' => new Expression('SUM(token_balance)')
+            ));
+            $select->where($oWh);
+        });
+        $fBalanceAdmin = $rowset->toArray()[0]['sum'];
+
+        $rowset = $oUsrTbl->select(function(Select $select) {
+            $oWh = new Where();
+            $oWh->NEST
+                ->notEqualTo('User_ID', 335874987)
+                ->AND
+                ->notEqualTo('User_ID', 335880436)
+                ->AND
+                ->notEqualTo('User_ID', 335877074)
+                ->AND
+                ->notEqualTo('User_ID', 335880700)
+                ->AND
+                ->notEqualTo('User_ID', 335875860)
+                ->AND
+                ->notEqualTo('User_ID', 335874988)
+                ->AND
+                ->notEqualTo('User_ID', 335875071)
+                ->UNNEST;
+            $oWh->lessThanOrEqualTo('token_balance', 500);
+
+            $select->columns(array(
+                'sum' => new Expression('SUM(token_balance)')
+            ));
+            $select->where($oWh);
+        });
+        $fBalanceSmall = $rowset->toArray()[0]['sum'];
+
+        $rowset = $oUsrTbl->select(function(Select $select) {
+            $oWh = new Where();
+            $oWh->NEST
+                ->notEqualTo('User_ID', 335874987)
+                ->AND
+                ->notEqualTo('User_ID', 335880436)
+                ->AND
+                ->notEqualTo('User_ID', 335877074)
+                ->AND
+                ->notEqualTo('User_ID', 335880700)
+                ->AND
+                ->notEqualTo('User_ID', 335875860)
+                ->AND
+                ->notEqualTo('User_ID', 335874988)
+                ->AND
+                ->notEqualTo('User_ID', 335875071)
+                ->UNNEST;
+            $oWh->greaterThanOrEqualTo('token_balance', 1000);
+
+            $select->columns(array(
+                'sum' => new Expression('SUM(token_balance)')
+            ));
+            $select->where($oWh);
+        });
+        $fBalanceReady = $rowset->toArray()[0]['sum'];
+
+        $oSetTbl = new TableGateway('user_setting', CoreEntityController::$oDbAdapter);
+        $oMinerPayments = $oSetTbl->select(['setting_name' => 'mining-weekly-address']);
+
+        $oUsrTbl = $this->oTableGateway;
+        $fMinerBalances = 0;
+        if(count($oMinerPayments) > 0) {
+            foreach($oMinerPayments as $oPay) {
+                $oPayer = $oUsrTbl->getSingle($oPay->user_idfs);
+                $fMinerBalances+=$oPayer->token_balance;
+            }
+        }
+
+        $oWthTbl =  new TableGateway('faucet_withdraw', CoreEntityController::$oDbAdapter);
+        $rowset = $oWthTbl->select(function(Select $select) {
+            $select->columns(array(
+                'sum' => new Expression('SUM(amount)')
+            ));
+        });
+        $fBalanceWth = $rowset->toArray()[0]['sum'];
+
+        $rowset = $oWthTbl->select(function(Select $select) {
+            $oWh = new Where();
+            $oWh->like('date_sent', date('Y-m-d', time()).'%');
+
+            $select->columns(array(
+                'sum' => new Expression('SUM(amount)')
+            ));
+            $select->where($oWh);
+        });
+        $fBalanceWthTd = $rowset->toArray()[0]['sum'];
+
+        $aAppMetrics = [
+            'total_balances' => round($fBalance,0),
+            'miner_balances' => round($fMinerBalances,0),
+            'admin_balances' => round($fBalanceAdmin,0),
+            'small_balances' => round($fBalanceSmall,0),
+            'widthdrawable_balances' => round($fBalanceReady,0),
+            'withdraw_today' => round($fBalanceWthTd,0),
+            'withdraw_total' => round($fBalanceWth,0),
+            'withdraw_limit' => round($fTotalLimit,0),
+        ];
+
+        $oCheckWh = new Where();
+        $oCheckWh->like('stats_key', 'tokenmetrics-daily');
+        $oCheckWh->like('date', date('Y-m-d', time()).'%');
+        $oStatsCheck = $oStatsTbl->select($oCheckWh);
+
+        if(count($oStatsCheck) == 0) {
+            $oStatsTbl->insert([
+                'stats_key' => 'tokenmetrics-daily',
+                'date' => date('Y-m-d H:i:s', time()),
+                'data' => json_encode($aAppMetrics),
+            ]);
+        } else {
+            $oStatsTbl->update([
+                'data' => json_encode($aAppMetrics),
+                'date' => date('Y-m-d H:i:s', time()),
+            ],$oCheckWh);
+        }
+
+        echo 'done';
+
+        return false;
+    }
+
+    public function withdrawstatsAction()
+    {
+        $this->layout('layout/json');
+
+        $oStatsTbl = new TableGateway('core_statistic', CoreEntityController::$oDbAdapter);
+        $oUsrTbl = new TableGateway('user', CoreEntityController::$oDbAdapter);
+
+        $sTime = time();
+
+        $oWthTbl =  new TableGateway('faucet_withdraw', CoreEntityController::$oDbAdapter);
+        $rowset = $oWthTbl->select(function(Select $select) {
+            $select->columns(array(
+                'sum' => new Expression('SUM(amount)')
+            ));
+        });
+        $fBalanceWth = $rowset->toArray()[0]['sum'];
+
+        $rowset = $oWthTbl->select(function(Select $select) {
+            $sTime = time();
+            $oWh = new Where();
+            $oWh->like('date_sent', date('Y-m-d', $sTime).'%');
+
+            $select->columns(array(
+                'sum' => new Expression('SUM(amount)')
+            ));
+            $select->where($oWh);
+        });
+        $fBalanceWthTd = $rowset->toArray()[0]['sum'];
+
+        $aAppMetrics = [
+            'withdraw_today' => round($fBalanceWthTd,0),
+            'withdraw_total' => round($fBalanceWth,0),
+        ];
+
+        $oCheckWh = new Where();
+        $oCheckWh->like('stats_key', 'withdrawmetrics-daily');
+        $oCheckWh->like('date', date('Y-m-d', $sTime).'%');
+        $oStatsCheck = $oStatsTbl->select($oCheckWh);
+
+        if(count($oStatsCheck) == 0) {
+            $oStatsTbl->insert([
+                'stats_key' => 'withdrawmetrics-daily',
+                'date' => date('Y-m-d H:i:s',$sTime),
+                'data' => json_encode($aAppMetrics),
+            ]);
+        } else {
+            $oStatsTbl->update([
+                'data' => json_encode($aAppMetrics),
+                'date' => date('Y-m-d H:i:s', $sTime),
+            ],$oCheckWh);
+        }
+
+        echo 'done';
+
+        return false;
+    }
+
+    public function fetchnanosharesAction()
+    {
+        $bCheck = true;
+        if(!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if(!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/etc/sharesperworker/0x9b79a4ad71e6f1db71adc5b4f0dddbee4c1bcad1/1');
+        $oApiData = json_decode($sApiINfo);
+
+        $oMinerTbl = $this->getCustomTable('faucet_miner');
+        $oUsrTbl = $this->getCustomTable('user');
+        $minersFound = 0;
+        $fTotalHash = 0;
+
+        $oSetTbl = $this->getCustomTable('user_setting');
+
+        $sApiINfoHash = file_get_contents('https://api.nanopool.org/v1/etc/avghashratelimited/0x9b79a4ad71e6f1db71adc5b4f0dddbee4c1bcad1/1');
+        $oApiDataHash = json_decode($sApiINfoHash);
+
+        $fTotalShares = 0;
+        $fTotalHash = $oApiDataHash->data;
+        $aMinersToPay = [];
+        if(isset($oApiData->data)) {
+            foreach($oApiData->data as $oW) {
+                $bIsFaucetMiner = stripos($oW->worker,'swissfaucetio');
+                if($bIsFaucetMiner === false) {
+                    # ignore
+                } else {
+                    $iUserID = substr($oW->worker,strlen('swissfaucetio'));
+                    $oMinerUser = false;
+                    try {
+                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
+                    } catch(\RuntimeException $e) {
+                        # user not found
+                    }
+                    if($oMinerUser) {
+                        $minersFound++;
+                        $iCurrentShares = $oW->shares;
+                        $fTotalShares+= $oW->shares;
+                        $oLastEntryWh = new Where();
+                        $oLastEntryWh->equalTo('user_idfs', $oMinerUser->getID());
+                        $oLastEntryWh->greaterThanOrEqualTo('date', date('Y-m-d H:i:s', strtotime('-1 hour')));
+                        $oLastEntryWh->like('coin', 'etc');
+
+                        $oLastSel = new Select($oMinerTbl->getTable());
+                        $oLastSel->where($oLastEntryWh);
+                        $oLastSel->order('date DESC');
+                        $oLastSel->limit(1);
+
+                        if($iCurrentShares < 0) {
+                            $iCurrentShares = 0;
+                        }
+
+                        $oLastEntry = $oMinerTbl->selectWith($oLastSel);
+                        if(count($oLastEntry) == 0) {
+                            $aMinersToPay[$oMinerUser->getID()] = $iCurrentShares;
+                        } else {
+                            echo 'miner shares already parsed within last 60 minutes - ignoring';
+                        }
+                    }
+                }
+            }
+        }
+
+        /**
+         *  $fCoins = round((float)($iCurrentShares/1000)*2000,2);
+        $oMinerTbl->insert([
+        'user_idfs' => $oMinerUser->getID(),
+        'rating' => $iCurrentShares,
+        'shares' => $iCurrentShares,
+        'amount_coin' => $fCoins,
+        'date' => date('Y-m-d H:i:s', time()),
+        'coin' => 'etc',
+        'pool' => 'nanopool',
+        ]);
+        echo 'miner added';
+         *
+         * if($fCoins > 0) {
+        $fCurrentBalance = $oUsrTbl->select(['User_ID' => $oMinerUser->getID()])->current()->token_balance;
+        $oUsrTbl->update([
+        'token_balance' => $fCurrentBalance+$fCoins,
+        ],'User_ID = '.$oMinerUser->getID());
+        }
+         */
+
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/etc/approximated_earnings/'.$fTotalHash);
+        $earns = json_decode($sApiINfo);
+
+        $fTotalPay = $earns->data->hour->dollars;
+
+        foreach(array_keys($aMinersToPay) as $iMiner) {
+            $iShares = $aMinersToPay[$iMiner];
+            $myPerc = (100/($fTotalShares/$iShares)/100);
+            $myPayDollar = $fTotalPay*$myPerc;
+            $myPayCoin = round($myPayDollar*25000);
+
+            $oMinerTbl->insert([
+                'user_idfs' => $iMiner,
+                'rating' => $iShares,
+                'shares' => $iShares,
+                'amount_coin' => $myPayCoin,
+                'date' => date('Y-m-d H:i:s', time()),
+                'coin' => 'etc',
+                'pool' => 'nanopool',
+            ]);
+
+            if($myPayCoin > 0) {
+                $newBalance = $this->executeTransaction($myPayCoin, false, $iMiner, $iShares, 'etc-nanoshares', ($myPerc*100).'% of all shares on pool. dollar val = '.$myPayDollar);
+            }
+            echo 'Miner '.$iMiner.' has '.($myPerc*100).'% of shares = '.$myPayCoin.' Coins @ $ '.$myPayDollar. ' - new balance = '.$newBalance;
+
+        }
+
+        # update hashrates for users
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/etc/avghashrateworkers/0x9b79a4ad71e6f1db71adc5b4f0dddbee4c1bcad1/1');
+        $workers = json_decode($sApiINfo);
+
+        if(isset($workers->data)) {
+            if(is_array($workers->data)) {
+                foreach($workers->data as $worker) {
+                    $userId = substr($worker->worker,strlen('swissfaucetio'));
+                    $oMinerUser = false;
+                    try {
+                        $oMinerUser = $this->oTableGateway->getSingle($userId);
+                    } catch(\RuntimeException $e) {
+
+                    }
+
+                    if($oMinerUser) {
+                        $oHrCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'gpuminer-currenthashrate']);
+                        if(count($oHrCheck) == 0) {
+                            $oSetTbl->insert([
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currenthashrate',
+                                'setting_value' => $worker->hashrate
+                            ]);
+                        } else {
+                            $oSetTbl->update([
+                                'setting_value' => $worker->hashrate
+                            ], [
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currenthashrate',
+                            ]);
+                        }
+                    }
+                }
+            }
+        }
+
+        echo 'done. Found '.$minersFound.' @ '.$fTotalHash.' MH/s - '.$fTotalShares.' shares = $ '.$earns->data->hour->dollars;
+
+        return false;
+        //
+    }
+
+    public function startlotteryroundAction()
+    {
+        $bCheck = true;
+        if(!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if(!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $oLotteryTbl = $this->getCustomTable('faucet_lottery_round');
+        $oLotteryTbl->insert([
+            'server_hash' => '',
+            'date_started' => date('Y-m-d H:i:s', time()),
+            'date_end' => date('Y-m-d H:i:s', strtotime('+7 days')),
+        ]);
+
+        echo 'next round started';
+
+        return false;
+    }
+
+    public function transactionstatsAction() {
+        $bCheck = true;
+        if(!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if(!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $oTransTbl = $this->getCustomtable('faucet_transaction');
+
+        $oTodayWh = new Where();
+        $oTodayWh->like('date', date('Y-m-d', time()).'%');
+        $oTodayTrans = $oTransTbl->select($oTodayWh);
+        $iTotalOut = 0;
+        $iTotalIn = 0;
+        $iTotalTrans = 0;
+        $aAmountByType = [];
+        $aAmountByTypeOut = [];
+        foreach($oTodayTrans as $oT) {
+            $iTotalTrans++;
+            if($oT->is_output == 1) {
+                $iTotalOut+=$oT->amount;
+                if(!array_key_exists($oT->ref_type,$aAmountByTypeOut)) {
+                    $aAmountByTypeOut[$oT->ref_type] = 0;
+                }
+                $aAmountByTypeOut[$oT->ref_type]+=$oT->amount;
+            } else {
+                $iTotalIn+=$oT->amount;
+                if(!array_key_exists($oT->ref_type,$aAmountByType)) {
+                    $aAmountByType[$oT->ref_type] = 0;
+                }
+                $aAmountByType[$oT->ref_type]+=$oT->amount;
+            }
+        }
+
+        $sTime = time();
+
+        $oStatsTbl = new TableGateway('core_statistic', CoreEntityController::$oDbAdapter);
+
+        $aAppMetrics = [
+            'outputs' => $aAmountByTypeOut,
+            'inputs' => $aAmountByType,
+            'total_count' => $iTotalTrans,
+            'total_in' => $iTotalIn,
+            'total_out' => $iTotalOut,
+        ];
+
+        $oCheckWh = new Where();
+        $oCheckWh->like('stats_key', 'transmetrics-daily');
+        $oCheckWh->like('date', date('Y-m-d', $sTime).'%');
+        $oStatsCheck = $oStatsTbl->select($oCheckWh);
+
+        if(count($oStatsCheck) == 0) {
+            $oStatsTbl->insert([
+                'stats_key' => 'transmetrics-daily',
+                'date' => date('Y-m-d H:i:s',$sTime),
+                'data' => json_encode($aAppMetrics),
+            ]);
+        } else {
+            $oStatsTbl->update([
+                'data' => json_encode($aAppMetrics),
+                'date' => date('Y-m-d H:i:s', $sTime),
+            ],$oCheckWh);
+        }
+
+        echo 'done';
+
+        return false;
+    }
+
+    public function gamestatsAction()
+    {
+        $bCheck = true;
+        if(!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if(!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $oTransTbl = $this->getCustomtable('faucet_game_match');
+
+        $oTodayWh = new Where();
+        $oTodayWh->like('date_matched', date('Y-m-d', time()).'%');
+        $oTodayTrans = $oTransTbl->select($oTodayWh);
+        $iTotalOut = 0;
+        $iTotalIn = 0;
+        $iTotalTrans = 0;
+        $aAmountByType = [];
+        $iHostWin = 0;
+        $iHostLose = 0;
+        $iClientWin = 0;
+        $iClientLose = 0;
+        $iEven = 0;
+        foreach($oTodayTrans as $oT) {
+            $iTotalTrans++;
+            $iTotalIn+=$oT->amount_bet;
+            if(!array_key_exists($oT->client_user_idfs,$aAmountByType)) {
+                $aAmountByType[$oT->client_user_idfs] = true;
+            }
+            if(!array_key_exists($oT->host_user_idfs,$aAmountByType)) {
+                $aAmountByType[$oT->host_user_idfs] = true;
+            }
+            if($oT->winner_idfs == 0) {
+                $iEven++;
+            } elseif($oT->winner_idfs == $oT->host_user_idfs) {
+                $iHostWin++;
+                $iClientLose++;
+            } else {
+                $iClientWin++;
+                $iHostLose++;
+            }
+        }
+
+        $aMetrics = [
+            'iTotalTrans' => $iTotalTrans,
+            'iTotalIn' => $iTotalIn,
+            'iPlayers' => count($aAmountByType),
+            'iEven' => $iEven,
+            'iClientLose' => $iClientLose,
+            'iClientWin' => $iClientWin,
+            'iHostWin' => $iHostWin,
+            'iHostLose' => $iHostLose,
+        ];
+
+        $sTime = time();
+
+        $oStatsTbl = new TableGateway('core_statistic', CoreEntityController::$oDbAdapter);
+
+        $oCheckWh = new Where();
+        $oCheckWh->like('stats_key', 'gamemetrics-daily');
+        $oCheckWh->like('date', date('Y-m-d', $sTime).'%');
+        $oStatsCheck = $oStatsTbl->select($oCheckWh);
+
+        if(count($oStatsCheck) == 0) {
+            $oStatsTbl->insert([
+                'stats_key' => 'gamemetrics-daily',
+                'date' => date('Y-m-d H:i:s',$sTime),
+                'data' => json_encode($aMetrics),
+            ]);
+        } else {
+            $oStatsTbl->update([
+                'data' => json_encode($aMetrics),
+                'date' => date('Y-m-d H:i:s', $sTime),
+            ],$oCheckWh);
+        }
+
+        echo 'done';
+
+        return false;
+    }
+
+    public function refbonusAction() {
+        $bCheck = true;
+        if(!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            $authKey = filter_var($_REQUEST['authkey'], FILTER_SANITIZE_STRING);
+            if($authKey != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if(!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $oUsrTbl = new TableGateway('user', CoreEntityController::$oDbAdapter);
+        $statsTbl = new TableGateway('user_statistic', CoreEntityController::$oDbAdapter);
+        $wthTable = new TableGateway('faucet_withdraw', CoreEntityController::$oDbAdapter);
+
+        $usersToCheck = $oUsrTbl->select();
+        foreach($usersToCheck as $user) {
+            $userRefs = $oUsrTbl->select(['ref_user_idfs' => $user->User_ID]);
+            $refWithdrawn = 0;
+            if(count($userRefs) > 0) {
+                foreach($userRefs as $ref) {
+                    $refWth = $wthTable->select(['user_idfs' => $ref->User_ID,'state' => 'done']);
+                    if(count($refWth) > 0) {
+                        foreach($refWth as $wth) {
+                            $refWithdrawn+=$wth->amount;
+                        }
+                    }
+                }
+            }
+            $checkWh = new Where();
+            $checkWh->like('stat_key', 'user-ref-bonus');
+            $checkWh->equalTo('user_idfs', $user->User_ID);
+            $checkWh->like('date', date('Y-m-d', time()).'%');
+
+            $statCheck = $statsTbl->select($checkWh);
+            if(count($statCheck) == 0) {
+                 $statsTbl->insert([
+                    'data' => json_encode(['withdrawn' => $refWithdrawn,'bonus' => $refWithdrawn*.1]),
+                    'stat_key' => 'user-ref-bonus',
+                    'date' => date('Y-m-d H:i:s', time()),
+                    'user_idfs' => $user->User_ID
+                ]);
+            } else {
+                $statsTbl->update([
+                    'data' => json_encode(['withdrawn' => $refWithdrawn,'bonus' => $refWithdrawn*.1]),
+                    'date' => date('Y-m-d H:i:s', time())
+                ], $checkWh);
+            }
+        }
+
+        echo 'done';
+
+        return false;
+    }
+
+    /**
+     * Execute Faucet Token Transaction for User
+     *
+     * @param float $amount - Amount of Token to transfer
+     * @param bool $isInput - Defines if Transaction is Output
+     * @param int $userId - Target User ID
+     * @param int $refId - Reference ID for Transaction
+     * @param string $refType - Reference Type for Transaction
+     * @param string $description - Detailed Description for Transaction
+     * @param int $createdBy (optional) - Source User ID
+     * @since 1.0.0
+     */
+    private function executeTransaction(float $amount, bool $isOutput, int $userId, int $refId,
+                                       string $refType, string $description, int $createdBy = 0)
+    {
+        $mTransTbl = new TableGateway('faucet_transaction', CoreEntityController::$oDbAdapter);
+        $mUserTbl = new TableGateway('user', CoreEntityController::$oDbAdapter);
+
+        # no negative transactions allowed
+        if($amount < 0) {
+            return false;
+        }
+
+        # Do not allow zero for update
+        if($userId == 0) {
+            return false;
+        }
+
+        # Generate Transaction ID
+        try {
+            $sTransactionID = $bytes = random_bytes(5);
+        } catch(\Exception $e) {
+            # Fallback if random bytes fails
+            $sTransactionID = time();
+        }
+        $sTransactionID = hash("sha256",$sTransactionID);
+
+        # Get user from database
+        $userInfo = $mUserTbl->select(['User_ID' => $userId]);
+        if(count($userInfo) > 0) {
+            $userInfo = $userInfo->current();
+            # calculate new balance
+            $newBalance = ($isOutput) ? $userInfo->token_balance-$amount : $userInfo->token_balance+$amount;
+            # Insert Transaction
+            if($mTransTbl->insert([
+                'Transaction_ID' => $sTransactionID,
+                'amount' => $amount,
+                'token_balance' => $userInfo->token_balance,
+                'token_balance_new' => $newBalance,
+                'is_output' => ($isOutput) ? 1 : 0,
+                'date' => date('Y-m-d H:i:s', time()),
+                'ref_idfs' => $refId,
+                'ref_type' => $refType,
+                'comment' => $description,
+                'user_idfs' => $userId,
+                'created_by' => ($createdBy == 0) ? $userId : $createdBy,
+            ])) {
+                # update user balance
+                $mUserTbl->update([
+                    'token_balance' => $newBalance,
+                ],[
+                    'User_ID' => $userId
+                ]);
+                return $newBalance;
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
     }
 }
