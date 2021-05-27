@@ -999,7 +999,7 @@ class BatchController extends CoreEntityController
                         $fTotalShares+= $oW->shares;
                         $oLastEntryWh = new Where();
                         $oLastEntryWh->equalTo('user_idfs', $oMinerUser->getID());
-                        $oLastEntryWh->greaterThanOrEqualTo('date', date('Y-m-d H:i:s', strtotime('-1 hour')));
+                        $oLastEntryWh->greaterThanOrEqualTo('date', date('Y-m-d H:i:s', strtotime('-50 minutes')));
                         $oLastEntryWh->like('coin', 'etc');
 
                         $oLastSel = new Select($oMinerTbl->getTable());
@@ -1046,7 +1046,7 @@ class BatchController extends CoreEntityController
         $sApiINfo = file_get_contents('https://api.nanopool.org/v1/etc/approximated_earnings/'.$fTotalHash);
         $earns = json_decode($sApiINfo);
 
-        $fTotalPay = $earns->data->hour->dollars;
+        $fTotalPay = $earns->data->hour->dollars*.8;
 
         foreach(array_keys($aMinersToPay) as $iMiner) {
             $iShares = $aMinersToPay[$iMiner];
@@ -1100,6 +1100,385 @@ class BatchController extends CoreEntityController
                             ], [
                                 'user_idfs' => $userId,
                                 'setting_name' => 'gpuminer-currenthashrate',
+                            ]);
+                        }
+                        $oHrTyCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'gpuminer-currentpool']);
+                        if(count($oHrTyCheck) == 0) {
+                            $oSetTbl->insert([
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currentpool',
+                                'setting_value' => 'etc'
+                            ]);
+                        } else {
+                            $oSetTbl->update([
+                                'setting_value' => 'etc'
+                            ], [
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currentpool',
+                            ]);
+                        }
+                    }
+                }
+            }
+        }
+
+        echo 'done. Found '.$minersFound.' @ '.$fTotalHash.' MH/s - '.$fTotalShares.' shares = $ '.$earns->data->hour->dollars;
+
+        return false;
+        //
+    }
+
+    public function fetchcfxnanosharesAction()
+    {
+        $bCheck = true;
+        if(!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if(!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/cfx/sharesperworker/aatv9rfhsh3t7n7z1nat36pfbwfkgf04epu5cv0b54/1');
+        $oApiData = json_decode($sApiINfo);
+
+        $oMinerTbl = $this->getCustomTable('faucet_miner');
+        $oUsrTbl = $this->getCustomTable('user');
+        $minersFound = 0;
+        $fTotalHash = 0;
+
+        $oSetTbl = $this->getCustomTable('user_setting');
+
+        $sApiINfoHash = file_get_contents('https://api.nanopool.org/v1/cfx/avghashratelimited/aatv9rfhsh3t7n7z1nat36pfbwfkgf04epu5cv0b54/1');
+        $oApiDataHash = json_decode($sApiINfoHash);
+
+        $fTotalShares = 0;
+        $fTotalHash = $oApiDataHash->data;
+        $aMinersToPay = [];
+        if(isset($oApiData->data)) {
+            foreach($oApiData->data as $oW) {
+                $bIsFaucetMiner = stripos($oW->worker,'swissfaucetio');
+                if($bIsFaucetMiner === false) {
+                    # ignore
+                } else {
+                    $iUserID = substr($oW->worker,strlen('swissfaucetio'));
+                    $oMinerUser = false;
+                    try {
+                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
+                    } catch(\RuntimeException $e) {
+                        # user not found
+                    }
+                    if($oMinerUser) {
+                        $minersFound++;
+                        $iCurrentShares = $oW->shares;
+                        $fTotalShares+= $oW->shares;
+                        $oLastEntryWh = new Where();
+                        $oLastEntryWh->equalTo('user_idfs', $oMinerUser->getID());
+                        $oLastEntryWh->greaterThanOrEqualTo('date', date('Y-m-d H:i:s', strtotime('-50 minutes')));
+                        $oLastEntryWh->like('coin', 'cfx');
+
+                        $oLastSel = new Select($oMinerTbl->getTable());
+                        $oLastSel->where($oLastEntryWh);
+                        $oLastSel->order('date DESC');
+                        $oLastSel->limit(1);
+
+                        if($iCurrentShares < 0) {
+                            $iCurrentShares = 0;
+                        }
+
+                        $oLastEntry = $oMinerTbl->selectWith($oLastSel);
+                        if(count($oLastEntry) == 0) {
+                            $aMinersToPay[$oMinerUser->getID()] = $iCurrentShares;
+                        } else {
+                            echo 'miner shares already parsed within last 60 minutes - ignoring';
+                        }
+                    }
+                }
+            }
+        }
+
+        /**
+         *  $fCoins = round((float)($iCurrentShares/1000)*2000,2);
+        $oMinerTbl->insert([
+        'user_idfs' => $oMinerUser->getID(),
+        'rating' => $iCurrentShares,
+        'shares' => $iCurrentShares,
+        'amount_coin' => $fCoins,
+        'date' => date('Y-m-d H:i:s', time()),
+        'coin' => 'etc',
+        'pool' => 'nanopool',
+        ]);
+        echo 'miner added';
+         *
+         * if($fCoins > 0) {
+        $fCurrentBalance = $oUsrTbl->select(['User_ID' => $oMinerUser->getID()])->current()->token_balance;
+        $oUsrTbl->update([
+        'token_balance' => $fCurrentBalance+$fCoins,
+        ],'User_ID = '.$oMinerUser->getID());
+        }
+         */
+
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/cfx/approximated_earnings/'.$fTotalHash);
+        $earns = json_decode($sApiINfo);
+
+        $fTotalPay = $earns->data->hour->dollars*.8;
+
+        foreach(array_keys($aMinersToPay) as $iMiner) {
+            $iShares = $aMinersToPay[$iMiner];
+            $myPerc = (100/($fTotalShares/$iShares)/100);
+            $myPayDollar = $fTotalPay*$myPerc;
+            $myPayCoin = round($myPayDollar*25000);
+
+            $oMinerTbl->insert([
+                'user_idfs' => $iMiner,
+                'rating' => $iShares,
+                'shares' => $iShares,
+                'amount_coin' => $myPayCoin,
+                'date' => date('Y-m-d H:i:s', time()),
+                'coin' => 'cfx',
+                'pool' => 'nanopool',
+            ]);
+
+            if($myPayCoin > 0) {
+                $newBalance = $this->executeTransaction($myPayCoin, false, $iMiner, $iShares, 'etc-nanoshares', ($myPerc*100).'% of all shares on pool. dollar val = '.$myPayDollar);
+            }
+            echo 'Miner '.$iMiner.' has '.($myPerc*100).'% of shares = '.$myPayCoin.' Coins @ $ '.$myPayDollar. ' - new balance = '.$newBalance;
+
+        }
+
+        # update hashrates for users
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/cfx/avghashrateworkers/aatv9rfhsh3t7n7z1nat36pfbwfkgf04epu5cv0b54/1');
+        $workers = json_decode($sApiINfo);
+
+        if(isset($workers->data)) {
+            if(is_array($workers->data)) {
+                foreach($workers->data as $worker) {
+                    $userId = substr($worker->worker,strlen('swissfaucetio'));
+                    $oMinerUser = false;
+                    try {
+                        $oMinerUser = $this->oTableGateway->getSingle($userId);
+                    } catch(\RuntimeException $e) {
+
+                    }
+
+                    if($oMinerUser) {
+                        $oHrCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'gpuminer-currenthashrate']);
+                        if(count($oHrCheck) == 0) {
+                            $oSetTbl->insert([
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currenthashrate',
+                                'setting_value' => $worker->hashrate
+                            ]);
+                        } else {
+                            $oSetTbl->update([
+                                'setting_value' => $worker->hashrate
+                            ], [
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currenthashrate',
+                            ]);
+                        }
+                        $oHrTyCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'gpuminer-currentpool']);
+                        if(count($oHrTyCheck) == 0) {
+                            $oSetTbl->insert([
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currentpool',
+                                'setting_value' => 'cfx'
+                            ]);
+                        } else {
+                            $oSetTbl->update([
+                                'setting_value' => 'cfx'
+                            ], [
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currentpool',
+                            ]);
+                        }
+                    }
+                }
+            }
+        }
+
+        echo 'done. Found '.$minersFound.' @ '.$fTotalHash.' MH/s - '.$fTotalShares.' shares = $ '.$earns->data->hour->dollars;
+
+        return false;
+        //
+    }
+
+    public function fetchrvnnanosharesAction()
+    {
+        $bCheck = true;
+        if(!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if(!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/rvn/sharesperworker/RQMwgG6sY3aby48Hdo7MdQUHZUTUvACCcT/1');
+        $oApiData = json_decode($sApiINfo);
+
+        $oMinerTbl = $this->getCustomTable('faucet_miner');
+        $oUsrTbl = $this->getCustomTable('user');
+        $minersFound = 0;
+        $fTotalHash = 0;
+
+        $oSetTbl = $this->getCustomTable('user_setting');
+
+        $sApiINfoHash = file_get_contents('https://api.nanopool.org/v1/rvn/avghashratelimited/RQMwgG6sY3aby48Hdo7MdQUHZUTUvACCcT/1');
+        $oApiDataHash = json_decode($sApiINfoHash);
+
+        $fTotalShares = 0;
+        $fTotalHash = $oApiDataHash->data;
+        $aMinersToPay = [];
+        if(isset($oApiData->data)) {
+            foreach($oApiData->data as $oW) {
+                $bIsFaucetMiner = stripos($oW->worker,'swissfaucetio');
+                if($bIsFaucetMiner === false) {
+                    # ignore
+                } else {
+                    $iUserID = substr($oW->worker,strlen('swissfaucetio'));
+                    $oMinerUser = false;
+                    try {
+                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
+                    } catch(\RuntimeException $e) {
+                        # user not found
+                    }
+                    if($oMinerUser) {
+                        $minersFound++;
+                        $iCurrentShares = $oW->shares;
+                        $fTotalShares+= $oW->shares;
+                        $oLastEntryWh = new Where();
+                        $oLastEntryWh->equalTo('user_idfs', $oMinerUser->getID());
+                        $oLastEntryWh->greaterThanOrEqualTo('date', date('Y-m-d H:i:s', strtotime('-50 minutes')));
+                        $oLastEntryWh->like('coin', 'rvn');
+
+                        $oLastSel = new Select($oMinerTbl->getTable());
+                        $oLastSel->where($oLastEntryWh);
+                        $oLastSel->order('date DESC');
+                        $oLastSel->limit(1);
+
+                        if($iCurrentShares < 0) {
+                            $iCurrentShares = 0;
+                        }
+
+                        $oLastEntry = $oMinerTbl->selectWith($oLastSel);
+                        if(count($oLastEntry) == 0) {
+                            $aMinersToPay[$oMinerUser->getID()] = $iCurrentShares;
+                        } else {
+                            echo 'miner shares already parsed within last 60 minutes - ignoring';
+                        }
+                    }
+                }
+            }
+        }
+
+        /**
+         *  $fCoins = round((float)($iCurrentShares/1000)*2000,2);
+        $oMinerTbl->insert([
+        'user_idfs' => $oMinerUser->getID(),
+        'rating' => $iCurrentShares,
+        'shares' => $iCurrentShares,
+        'amount_coin' => $fCoins,
+        'date' => date('Y-m-d H:i:s', time()),
+        'coin' => 'etc',
+        'pool' => 'nanopool',
+        ]);
+        echo 'miner added';
+         *
+         * if($fCoins > 0) {
+        $fCurrentBalance = $oUsrTbl->select(['User_ID' => $oMinerUser->getID()])->current()->token_balance;
+        $oUsrTbl->update([
+        'token_balance' => $fCurrentBalance+$fCoins,
+        ],'User_ID = '.$oMinerUser->getID());
+        }
+         */
+
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/rvn/approximated_earnings/'.$fTotalHash);
+        $earns = json_decode($sApiINfo);
+
+        $fTotalPay = $earns->data->hour->dollars*.8;
+        if($fTotalPay <= 0) {
+            echo "invalid amount ".$fTotalPay." - cancel batch - ".$fTotalHash;
+            return false;
+        }
+
+        foreach(array_keys($aMinersToPay) as $iMiner) {
+            $iShares = $aMinersToPay[$iMiner];
+            $myPerc = (100/($fTotalShares/$iShares)/100);
+            $myPayDollar = $fTotalPay*$myPerc;
+            $myPayCoin = round($myPayDollar*25000);
+
+            $oMinerTbl->insert([
+                'user_idfs' => $iMiner,
+                'rating' => $iShares,
+                'shares' => $iShares,
+                'amount_coin' => $myPayCoin,
+                'date' => date('Y-m-d H:i:s', time()),
+                'coin' => 'rvn',
+                'pool' => 'nanopool',
+            ]);
+
+            if($myPayCoin > 0) {
+                $newBalance = $this->executeTransaction($myPayCoin, false, $iMiner, $iShares, 'rvn-nanoshares', ($myPerc*100).'% of all shares on pool. dollar val = '.$myPayDollar);
+            }
+            echo 'Miner '.$iMiner.' has '.($myPerc*100).'% of shares = '.$myPayCoin.' Coins @ $ '.$myPayDollar. ' - new balance = '.$newBalance;
+
+        }
+
+        # update hashrates for users
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/rvn/avghashrateworkers/RQMwgG6sY3aby48Hdo7MdQUHZUTUvACCcT/1');
+        $workers = json_decode($sApiINfo);
+
+        if(isset($workers->data)) {
+            if(is_array($workers->data)) {
+                foreach($workers->data as $worker) {
+                    $userId = substr($worker->worker,strlen('swissfaucetio'));
+                    $oMinerUser = false;
+                    try {
+                        $oMinerUser = $this->oTableGateway->getSingle($userId);
+                    } catch(\RuntimeException $e) {
+
+                    }
+
+                    if($oMinerUser) {
+                        $oHrCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'gpuminer-currenthashrate']);
+                        if(count($oHrCheck) == 0) {
+                            $oSetTbl->insert([
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currenthashrate',
+                                'setting_value' => $worker->hashrate
+                            ]);
+                        } else {
+                            $oSetTbl->update([
+                                'setting_value' => $worker->hashrate
+                            ], [
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currenthashrate',
+                            ]);
+                        }
+                        $oHrTyCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'gpuminer-currentpool']);
+                        if(count($oHrTyCheck) == 0) {
+                            $oSetTbl->insert([
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currentpool',
+                                'setting_value' => 'rvn'
+                            ]);
+                        } else {
+                            $oSetTbl->update([
+                                'setting_value' => 'rvn'
+                            ], [
+                                'user_idfs' => $userId,
+                                'setting_name' => 'gpuminer-currentpool',
                             ]);
                         }
                     }
@@ -1306,6 +1685,138 @@ class BatchController extends CoreEntityController
         return false;
     }
 
+    public function guildweeklysAction()
+    {
+        $bCheck = true;
+        if (!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            $authKey = filter_var($_REQUEST['authkey'], FILTER_SANITIZE_STRING);
+            if ($authKey != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if (!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $claimTbl = new TableGateway('faucet_claim', CoreEntityController::$oDbAdapter);
+        $minerTbl = new TableGateway('faucet_miner', CoreEntityController::$oDbAdapter);
+        $shortDoneTbl = new TableGateway('shortlink_link_user', CoreEntityController::$oDbAdapter);
+        $guildTbl = new TableGateway('faucet_guild', CoreEntityController::$oDbAdapter);
+        $statsTbl = new TableGateway('faucet_guild_statistic', CoreEntityController::$oDbAdapter);
+        $guildUserTbl = new TableGateway('faucet_guild_user', CoreEntityController::$oDbAdapter);
+        $weeklyClaimTbl = new TableGateway('faucet_guild_weekly_claim', CoreEntityController::$oDbAdapter);
+        $guilds = $guildTbl->select();
+
+        $weeklyStart = date('Y-m-d H:i:s', strtotime("last wednesday"));
+
+        foreach($guilds as $guild) {
+            $guildInfo = ['faucet_claims' => 0,'shortlinks' => 0,'gpushares' => 0];
+            $memberWh = new Where();
+            $memberWh->equalTo('guild_idfs', $guild->Guild_ID);
+            $memberWh->notLike('date_joined', '0000-00-00 00:00:00');
+            $members = $guildUserTbl->select($memberWh);
+
+            if(count($members) > 0) {
+                foreach($members as $member) {
+                    # count faucet claims
+                    $claimWh = new Where();
+                    $claimWh->equalTo('user_idfs', $member->user_idfs);
+                    $claimWh->greaterThanOrEqualTo('date', $weeklyStart);
+                    $claimWh->like('source', 'website');
+                    $guildInfo['faucet_claims']+= $claimTbl->select($claimWh)->count();
+
+                    # count shortlinks done
+                    $shDoneWh = new Where();
+                    $shDoneWh->equalTo('user_idfs', $member->user_idfs);
+                    $shDoneWh->greaterThanOrEqualTo('date_completed', $weeklyStart);
+                    $guildInfo['shortlinks']+= $shortDoneTbl->select($shDoneWh)->count();
+
+                    # count miner shares
+                    $gpuDoneWh = new Where();
+                    $gpuDoneWh->equalTo('user_idfs', $member->user_idfs);
+                    $gpuDoneWh->like('pool', 'nanopool');
+                    $gpuDoneWh->greaterThanOrEqualTo('date', $weeklyStart);
+                    $gpuShares = $minerTbl->select($gpuDoneWh);
+                    if(count($gpuShares) > 0) {
+                        foreach($gpuShares as $share) {
+                            $guildInfo['gpushares']+= $share->shares;
+                        }
+                    }
+                }
+            }
+
+            $statCheckWh = new Where();
+            $statCheckWh->equalTo('guild_idfs', $guild->Guild_ID);
+            $statCheckWh->like('stat_key', 'weekly-progress');
+            $statCheckWh->like('date', date('Y-m-d', strtotime($weeklyStart)));
+
+            $statCheck = $statsTbl->select($statCheckWh);
+            if(count($statCheck) == 0) {
+                $statsTbl->insert([
+                    'guild_idfs' => $guild->Guild_ID,
+                    'stat_key' => 'weekly-progress',
+                    'date' => date('Y-m-d', strtotime($weeklyStart)),
+                    'data' => json_encode($guildInfo)
+                ]);
+            } else {
+                $statsTbl->update([
+                    'data' => json_encode($guildInfo)
+                ], [
+                    'guild_idfs' => $guild->Guild_ID,
+                    'stat_key' => 'weekly-progress',
+                    'date' => date('Y-m-d', strtotime($weeklyStart)),
+                ]);
+            }
+
+            # check claims
+            if($guildInfo['faucet_claims'] >= 350) {
+                $claimWh = new Where();
+                $claimWh->equalTo('guild_idfs', $guild->Guild_ID);
+                $claimWh->equalTo('week', date('W', strtotime($weeklyStart)));
+                $claimWh->equalTo('weekly_idfs', 2);
+                $weeklyClaimedFaucet = $weeklyClaimTbl->select($claimWh);
+                if(count($weeklyClaimedFaucet) == 0) {
+                    $transID = $this->executeGuildTransaction(1000, false, (int)$guild->Guild_ID, 2, 'weekly-task', 'Weekly Task 350 Faucet Claim complete', 1);
+                    $weeklyClaimTbl->insert([
+                        'guild_idfs' => $guild->Guild_ID,
+                        'week' => date('W', strtotime($weeklyStart)),
+                        'weekly_idfs' => 2,
+                        'reward' => 1000,
+                        'transaction_id' => $transID,
+                        'date_claimed' => date('Y-m-d H:i:s', time()),
+                    ]);
+                }
+            }
+
+            if($guildInfo['shortlinks'] >= 1000) {
+                $claimWh = new Where();
+                $claimWh->equalTo('guild_idfs', $guild->Guild_ID);
+                $claimWh->equalTo('week', date('W', strtotime($weeklyStart)));
+                $claimWh->equalTo('weekly_idfs', 3);
+                $weeklyClaimed = $weeklyClaimTbl->select($claimWh);
+                if(count($weeklyClaimed) == 0) {
+                    $transID = $this->executeGuildTransaction(1000, false, (int)$guild->Guild_ID, 3, 'weekly-task', 'Weekly Task 1000 Shortlinks complete', 1);
+                    $weeklyClaimTbl->insert([
+                        'guild_idfs' => $guild->Guild_ID,
+                        'week' => date('W', strtotime($weeklyStart)),
+                        'weekly_idfs' => 3,
+                        'reward' => 1000,
+                        'transaction_id' => $transID,
+                        'date_claimed' => date('Y-m-d H:i:s', time()),
+                    ]);
+                }
+            }
+        }
+
+        echo 'done';
+
+        return false;
+    }
+
     public function refbonusAction() {
         $bCheck = true;
         if(!isset($_REQUEST['authkey'])) {
@@ -1430,6 +1941,78 @@ class BatchController extends CoreEntityController
                     'User_ID' => $userId
                 ]);
                 return $newBalance;
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * Execute Faucet Guild Token Transaction for User
+     *
+     * @param float $amount - Amount of Token to transfer
+     * @param bool $isInput - Defines if Transaction is Output
+     * @param int $guildId - Target Guild ID
+     * @param int $refId - Reference ID for Transaction
+     * @param string $refType - Reference Type for Transaction
+     * @param string $description - Detailed Description for Transaction
+     * @param int $createdBy (optional) - Source User ID
+     * @since 1.0.0
+     */
+    private function executeGuildTransaction(float $amount, bool $isOutput, int $guildId, int $refId,
+                                            string $refType, string $description, int $createdBy)
+    {
+        $mTransTbl = new TableGateway('faucet_guild_transaction', CoreEntityController::$oDbAdapter);
+        $mGuildTbl = new TableGateway('faucet_guild', CoreEntityController::$oDbAdapter);
+
+        # no negative transactions allowed
+        if($amount < 0) {
+            return false;
+        }
+
+        # Do not allow zero for update
+        if($guildId == 0) {
+            return false;
+        }
+
+        # Generate Transaction ID
+        try {
+            $sTransactionID = $bytes = random_bytes(5);
+        } catch(\Exception $e) {
+            # Fallback if random bytes fails
+            $sTransactionID = time();
+        }
+        $sTransactionID = hash("sha256",$sTransactionID);
+
+        # Get user from database
+        $guildInfo = $mGuildTbl->select(['Guild_ID' => $guildId]);
+        if(count($guildInfo) > 0) {
+            $guildInfo = $guildInfo->current();
+            # calculate new balance
+            $newBalance = ($isOutput) ? $guildInfo->token_balance-$amount : $guildInfo->token_balance+$amount;
+            # Insert Transaction
+            if($mTransTbl->insert([
+                'Transaction_ID' => $sTransactionID,
+                'amount' => $amount,
+                'token_balance' => $guildInfo->token_balance,
+                'token_balance_new' => $newBalance,
+                'is_output' => ($isOutput) ? 1 : 0,
+                'date' => date('Y-m-d H:i:s', time()),
+                'ref_idfs' => $refId,
+                'ref_type' => $refType,
+                'comment' => $description,
+                'guild_idfs' => $guildId,
+                'created_by' => $createdBy,
+            ])) {
+                # update user balance
+                $mGuildTbl->update([
+                    'token_balance' => $newBalance,
+                ],[
+                    'Guild_ID' => $guildId
+                ]);
+                return $sTransactionID;
             } else {
                 return false;
             }
