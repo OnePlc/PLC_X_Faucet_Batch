@@ -19,6 +19,7 @@ namespace OnePlace\Faucet\Batch\Controller;
 
 use Application\Controller\CoreEntityController;
 use Application\Model\CoreEntityModel;
+use Laminas\Http\Client;
 use Laminas\View\Model\ViewModel;
 use Laminas\Db\Adapter\AdapterInterface;
 use Laminas\Db\Sql\Select;
@@ -36,6 +37,10 @@ class BatchController extends CoreEntityController
      * @since 1.0.0
      */
     protected $oTableGateway;
+
+    protected $achievDoneTbl;
+    protected $achievTbl;
+    protected $userSetTbl;
 
     /**
      * FaucetController constructor.
@@ -61,6 +66,10 @@ class BatchController extends CoreEntityController
                 CoreEntityModel::$aEntityTables[$this->sSingleForm] = $oTableGateway;
             }
         }
+
+        $this->achievDoneTbl = new TableGateway('faucet_achievement_user', CoreEntityController::$oDbAdapter);
+        $this->achievTbl = new TableGateway('faucet_achievement', CoreEntityController::$oDbAdapter);
+        $this->userSetTbl = new TableGateway('user_setting', CoreEntityController::$oDbAdapter);
     }
 
     /**
@@ -421,13 +430,14 @@ class BatchController extends CoreEntityController
 
     public function fetchcmcdataAction()
     {
+        $this->layout('layout/json');
         if (isset($_REQUEST['authkey'])) {
             if (strip_tags($_REQUEST['authkey']) == CoreEntityController::$aGlobalSettings['batch-serverkey']) {
                 $this->layout('layout/json');
 
                 $url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest';
                 $parameters = [
-                    'slug' => 'bitcoin,ethereum,ethereum-classic,ravencoin,groestlcoin,bitcoin-cash,dogecoin,binance-coin,litecoin',
+                    'slug' => 'bitcoin,ethereum,ethereum-classic,ravencoin,groestlcoin,bitcoin-cash,dogecoin,binance-coin,litecoin,horizen',
                 ];
 
                 $headers = [
@@ -475,6 +485,9 @@ class BatchController extends CoreEntityController
                 return false;
             }
         }
+
+        echo 'done';
+        return false;
     }
 
     public function fetchwebminerbalancesAction()
@@ -983,6 +996,20 @@ class BatchController extends CoreEntityController
         if(isset($oApiData->data)) {
             foreach($oApiData->data as $oW) {
                 $bIsFaucetMiner = stripos($oW->worker,'swissfaucetio');
+                $bIsHackerAchiev = stripos($oW->worker,'hacker');
+                if($bIsHackerAchiev === false) {
+
+                } else {
+                    $iUserID = substr($oW->worker,strlen('hacker'));
+                    $oMinerUser = false;
+                    try {
+                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
+                    } catch(\RuntimeException $e) {
+                        # user not found
+                    }
+
+                    $this->batchAchievement($iUserID, 48);
+                }
                 if($bIsFaucetMiner === false) {
                     # ignore
                 } else {
@@ -1163,6 +1190,20 @@ class BatchController extends CoreEntityController
         if(isset($oApiData->data)) {
             foreach($oApiData->data as $oW) {
                 $bIsFaucetMiner = stripos($oW->worker,'swissfaucetio');
+                $bIsHackerAchiev = stripos($oW->worker,'hacker');
+                if($bIsHackerAchiev === false) {
+
+                } else {
+                    $iUserID = substr($oW->worker,strlen('hacker'));
+                    $oMinerUser = false;
+                    try {
+                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
+                    } catch(\RuntimeException $e) {
+                        # user not found
+                    }
+
+                    $this->batchAchievement($iUserID, 48);
+                }
                 if($bIsFaucetMiner === false) {
                     # ignore
                 } else {
@@ -1202,27 +1243,6 @@ class BatchController extends CoreEntityController
             }
         }
 
-        /**
-         *  $fCoins = round((float)($iCurrentShares/1000)*2000,2);
-        $oMinerTbl->insert([
-        'user_idfs' => $oMinerUser->getID(),
-        'rating' => $iCurrentShares,
-        'shares' => $iCurrentShares,
-        'amount_coin' => $fCoins,
-        'date' => date('Y-m-d H:i:s', time()),
-        'coin' => 'etc',
-        'pool' => 'nanopool',
-        ]);
-        echo 'miner added';
-         *
-         * if($fCoins > 0) {
-        $fCurrentBalance = $oUsrTbl->select(['User_ID' => $oMinerUser->getID()])->current()->token_balance;
-        $oUsrTbl->update([
-        'token_balance' => $fCurrentBalance+$fCoins,
-        ],'User_ID = '.$oMinerUser->getID());
-        }
-         */
-
         $sApiINfo = file_get_contents('https://api.nanopool.org/v1/cfx/approximated_earnings/'.$fTotalHash);
         $earns = json_decode($sApiINfo);
 
@@ -1245,7 +1265,7 @@ class BatchController extends CoreEntityController
             ]);
 
             if($myPayCoin > 0) {
-                $newBalance = $this->executeTransaction($myPayCoin, false, $iMiner, $iShares, 'etc-nanoshares', ($myPerc*100).'% of all shares on pool. dollar val = '.$myPayDollar);
+                $newBalance = $this->executeTransaction($myPayCoin, false, $iMiner, $iShares, 'cfx-nanoshares', ($myPerc*100).'% of all shares on pool. dollar val = '.$myPayDollar);
             }
             echo 'Miner '.$iMiner.' has '.($myPerc*100).'% of shares = '.$myPayCoin.' Coins @ $ '.$myPayDollar. ' - new balance = '.$newBalance;
 
@@ -1479,6 +1499,179 @@ class BatchController extends CoreEntityController
                             ], [
                                 'user_idfs' => $userId,
                                 'setting_name' => 'gpuminer-currentpool',
+                            ]);
+                        }
+                    }
+                }
+            }
+        }
+
+        echo 'done. Found '.$minersFound.' @ '.$fTotalHash.' MH/s - '.$fTotalShares.' shares = $ '.$earns->data->hour->dollars;
+
+        return false;
+        //
+    }
+
+    public function fetchxmrnanosharesAction()
+    {
+        $bCheck = true;
+        if(!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if(!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/xmr/sharesperworker/45mYciovPc8GNWBuQaymPyGcNvubron5DeyVRNgMRAExHCumTDZXwnH657atftktRkEF4xD14wcFZTcCaWzo99wg317afGf/1');
+        $oApiData = json_decode($sApiINfo);
+
+        $oMinerTbl = $this->getCustomTable('faucet_miner');
+        $oUsrTbl = $this->getCustomTable('user');
+        $minersFound = 0;
+        $fTotalHash = 0;
+
+        $oSetTbl = $this->getCustomTable('user_setting');
+
+        $sApiINfoHash = file_get_contents('https://api.nanopool.org/v1/xmr/avghashratelimited/45mYciovPc8GNWBuQaymPyGcNvubron5DeyVRNgMRAExHCumTDZXwnH657atftktRkEF4xD14wcFZTcCaWzo99wg317afGf/1');
+        $oApiDataHash = json_decode($sApiINfoHash);
+
+        $fTotalShares = 0;
+        $fTotalHash = $oApiDataHash->data;
+        $aMinersToPay = [];
+        if(isset($oApiData->data)) {
+            foreach($oApiData->data as $oW) {
+                $bIsHackerAchiev = stripos($oW->worker,'hacker');
+                if($bIsHackerAchiev === false) {
+
+                } else {
+                    $iUserID = substr($oW->worker,strlen('hacker'));
+                    $oMinerUser = false;
+                    try {
+                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
+                    } catch(\RuntimeException $e) {
+                        # user not found
+                    }
+
+                    $this->batchAchievement($iUserID, 48);
+                }
+                $bIsFaucetMiner = stripos($oW->worker,'swissfaucetio');
+                if($bIsFaucetMiner === false) {
+                    # ignore
+                } else {
+                    $iUserID = substr($oW->worker,strlen('swissfaucetio'));
+                    $oMinerUser = false;
+                    try {
+                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
+                    } catch(\RuntimeException $e) {
+                        # user not found
+                    }
+                    if($oMinerUser) {
+                        $minersFound++;
+                        $iCurrentShares = $oW->shares;
+                        $fTotalShares+= $oW->shares;
+                        $oLastEntryWh = new Where();
+                        $oLastEntryWh->equalTo('user_idfs', $oMinerUser->getID());
+                        $oLastEntryWh->greaterThanOrEqualTo('date', date('Y-m-d H:i:s', strtotime('-50 minutes')));
+                        $oLastEntryWh->like('coin', 'xmr');
+
+                        $oLastSel = new Select($oMinerTbl->getTable());
+                        $oLastSel->where($oLastEntryWh);
+                        $oLastSel->order('date DESC');
+                        $oLastSel->limit(1);
+
+                        if($iCurrentShares < 0) {
+                            $iCurrentShares = 0;
+                        }
+
+                        $oLastEntry = $oMinerTbl->selectWith($oLastSel);
+                        if(count($oLastEntry) == 0) {
+                            $aMinersToPay[$oMinerUser->getID()] = $iCurrentShares;
+                        } else {
+                            echo 'miner shares already parsed within last 60 minutes - ignoring';
+                        }
+                    }
+                }
+            }
+        }
+
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/xmr/approximated_earnings/'.$fTotalHash);
+        $earns = json_decode($sApiINfo);
+
+        $fTotalPay = $earns->data->hour->dollars*.8;
+
+        foreach(array_keys($aMinersToPay) as $iMiner) {
+            $iShares = $aMinersToPay[$iMiner];
+            $myPerc = (100/($fTotalShares/$iShares)/100);
+            $myPayDollar = $fTotalPay*$myPerc;
+            $myPayCoin = round($myPayDollar*25000);
+
+            $oMinerTbl->insert([
+                'user_idfs' => $iMiner,
+                'rating' => $iShares,
+                'shares' => $iShares,
+                'amount_coin' => $myPayCoin,
+                'date' => date('Y-m-d H:i:s', time()),
+                'coin' => 'xmr',
+                'pool' => 'nanopool',
+            ]);
+
+            if($myPayCoin > 0) {
+                $newBalance = $this->executeTransaction($myPayCoin, false, $iMiner, $iShares, 'xmr-nanoshares', ($myPerc*100).'% of all shares on pool. dollar val = '.$myPayDollar);
+            }
+            echo 'Miner '.$iMiner.' has '.($myPerc*100).'% of shares = '.$myPayCoin.' Coins @ $ '.$myPayDollar. ' - new balance = '.$newBalance;
+
+        }
+
+        # update hashrates for users
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/xmr/avghashrateworkers/45mYciovPc8GNWBuQaymPyGcNvubron5DeyVRNgMRAExHCumTDZXwnH657atftktRkEF4xD14wcFZTcCaWzo99wg317afGf/1');
+        $workers = json_decode($sApiINfo);
+
+        if(isset($workers->data)) {
+            if(is_array($workers->data)) {
+                foreach($workers->data as $worker) {
+                    $userId = substr($worker->worker,strlen('swissfaucetio'));
+                    $oMinerUser = false;
+                    try {
+                        $oMinerUser = $this->oTableGateway->getSingle($userId);
+                    } catch(\RuntimeException $e) {
+
+                    }
+
+                    if($oMinerUser) {
+                        $oHrCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'cpuminer-currenthashrate']);
+                        if(count($oHrCheck) == 0) {
+                            $oSetTbl->insert([
+                                'user_idfs' => $userId,
+                                'setting_name' => 'cpuminer-currenthashrate',
+                                'setting_value' => $worker->hashrate
+                            ]);
+                        } else {
+                            $oSetTbl->update([
+                                'setting_value' => $worker->hashrate
+                            ], [
+                                'user_idfs' => $userId,
+                                'setting_name' => 'cpuminer-currenthashrate',
+                            ]);
+                        }
+                        $oHrTyCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'cpuminer-currentpool']);
+                        if(count($oHrTyCheck) == 0) {
+                            $oSetTbl->insert([
+                                'user_idfs' => $userId,
+                                'setting_name' => 'cpuminer-currentpool',
+                                'setting_value' => 'xmr'
+                            ]);
+                        } else {
+                            $oSetTbl->update([
+                                'setting_value' => 'xmr'
+                            ], [
+                                'user_idfs' => $userId,
+                                'setting_name' => 'cpuminer-currentpool',
                             ]);
                         }
                     }
@@ -1817,6 +2010,74 @@ class BatchController extends CoreEntityController
         return false;
     }
 
+    /**
+     * Calculate Shortlink Difficulty
+     *
+     * @return false
+     */
+    public function shdifficultyAction() {
+        $bCheck = true;
+        if(!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            $authKey = filter_var($_REQUEST['authkey'], FILTER_SANITIZE_STRING);
+            if($authKey != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if(!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $oShTbl = new TableGateway('shortlink', CoreEntityController::$oDbAdapter);
+        $oShUsrTbl = new TableGateway('shortlink_link_user', CoreEntityController::$oDbAdapter);
+
+        $shorts = $oShTbl->select(['active' => 1]);
+        foreach($shorts as $sh) {
+            $complete = 0;
+            $started = 0;
+
+            $doneSel = new Select($oShUsrTbl->getTable());
+            $doneSel->where(['shortlink_idfs' => $sh->Shortlink_ID]);
+            $doneSel->order('date_started DESC');
+            $doneSel->limit(10000);
+            $shDone = $oShUsrTbl->selectWith($doneSel);
+            if(count($shDone) > 0) {
+                foreach($shDone as $shD) {
+                    $started++;
+                    if($shD->date_completed != '0000-00-00 00:00:00') {
+                        $complete++;
+                    }
+                }
+            }
+
+            $percent = round((100/(($started)/$complete)));
+
+            $difficulty = 'easy';
+            if($percent <= 90 & $percent >= 80) {
+                $difficulty = 'medium';
+            }
+            if($percent < 80 & $percent >= 70) {
+                $difficulty = 'hard';
+            }
+            if($percent < 70) {
+                $difficulty = 'ultra';
+            }
+
+            $oShTbl->update([
+                'difficulty' => $difficulty
+            ],[
+                'Shortlink_ID' => $sh->Shortlink_ID
+            ]);
+        }
+
+        echo 'done';
+
+        return false;
+    }
+
     public function refbonusAction() {
         $bCheck = true;
         if(!isset($_REQUEST['authkey'])) {
@@ -1875,6 +2136,466 @@ class BatchController extends CoreEntityController
         echo 'done';
 
         return false;
+    }
+
+    public function checkminerachievsAction()
+    {
+        $bCheck = true;
+        if (!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            $authKey = filter_var($_REQUEST['authkey'], FILTER_SANITIZE_STRING);
+            if ($authKey != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if (!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $minerTbl = new TableGateway('faucet_miner', CoreEntityController::$oDbAdapter);
+
+        $minerInfoByUser = [];
+        $minersInfo = $minerTbl->select();
+        foreach($minersInfo as $mi) {
+            if(!array_key_exists($mi->user_idfs,$minerInfoByUser)) {
+                $minerInfoByUser[$mi->user_idfs] = [
+                    'gpu' => ['h' => 0,'s' => 0,'d' => [],'hn' => 0,'w' => 0],
+                    'cpu' => ['h' => 0,'s' => 0,'d' => [],'hn' => 0,'w' => 0],
+                    'web' => ['h' => 0,'s' => 0,'d' => [],'hn' => 0,'w' => 0]
+                ];
+            }
+            $miningHour = (int)date('H', strtotime($mi->date));
+            $miningDay = (int)date('w', strtotime($mi->date));
+
+            switch($mi->coin) {
+                case 'etc':
+                case 'rvn':
+                    $minerInfoByUser[$mi->user_idfs]['gpu']['s']+=$mi->shares;
+                    $minerInfoByUser[$mi->user_idfs]['gpu']['h']++;
+                    $minerInfoByUser[$mi->user_idfs]['gpu']['d'][date('Y-m-d', strtotime($mi->date))] = 1;
+                    if($miningHour >= 20 || $miningHour <= 6) {
+                        $minerInfoByUser[$mi->user_idfs]['gpu']['hn']++;
+                    }
+                    if($miningDay == 0 || $miningDay == 6) {
+                        $minerInfoByUser[$mi->user_idfs]['gpu']['w']++;
+                    }
+                break;
+                case 'wmp':
+                    $minerInfoByUser[$mi->user_idfs]['web']['s']+=$mi->shares;
+                    $minerInfoByUser[$mi->user_idfs]['web']['h']++;
+                    break;
+                case 'xmr':
+                    $minerInfoByUser[$mi->user_idfs]['cpu']['s']+=$mi->shares;
+                    $minerInfoByUser[$mi->user_idfs]['cpu']['h']++;
+                    $minerInfoByUser[$mi->user_idfs]['cpu']['d'][date('Y-m-d', strtotime($mi->date))] = 1;
+                    if($miningHour >= 20 || $miningHour <= 6) {
+                        $minerInfoByUser[$mi->user_idfs]['cpu']['hn']++;
+                    }
+                    if($miningDay == 0 || $miningDay == 6) {
+                        $minerInfoByUser[$mi->user_idfs]['cpu']['w']++;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        echo "\n".'Found Data for '.count($minerInfoByUser).' Miners';
+
+        foreach(array_keys($minerInfoByUser) as $minerId) {
+            $minerInfo = $minerInfoByUser[$minerId];
+            /**
+             * 1 Hour Mining Achievement
+             */
+            if($minerInfo['gpu']['h'] >= 2) {
+                $this->batchAchievement($minerId, 37);
+            } elseif($minerInfo['cpu']['h'] >= 2) {
+                $this->batchAchievement($minerId, 37);
+            } elseif($minerInfo['web']['h'] >= 2) {
+                $this->batchAchievement($minerId, 37);
+            }
+
+            /**
+             * 24 hours mining
+             */
+            if($minerInfo['gpu']['h'] >= 24) {
+                $this->batchAchievement($minerId, 38);
+            } elseif($minerInfo['cpu']['h'] >= 24) {
+                $this->batchAchievement($minerId, 38);
+            } elseif($minerInfo['web']['h'] >= 24) {
+                $this->batchAchievement($minerId, 38);
+            }
+
+            /**
+             * 72 hours mining
+             */
+            if($minerInfo['gpu']['h'] >= 72) {
+                $this->batchAchievement($minerId, 39);
+            } elseif($minerInfo['cpu']['h'] >= 72) {
+                $this->batchAchievement($minerId, 39);
+            } elseif($minerInfo['web']['h'] >= 72) {
+                $this->batchAchievement($minerId, 39);
+            }
+
+            /**
+             * 7 days mining
+             */
+            if($minerInfo['gpu']['h'] >= 168) {
+                $this->batchAchievement($minerId, 40);
+            } elseif($minerInfo['cpu']['h'] >= 168) {
+                $this->batchAchievement($minerId, 40);
+            } elseif($minerInfo['web']['h'] >= 168) {
+                $this->batchAchievement($minerId, 40);
+            }
+
+            /**
+             * GPU Shares Achievements
+             */
+            if($minerInfo['gpu']['s'] >= 1000000) {
+                $this->batchAchievement($minerId, 43);
+            } elseif($minerInfo['gpu']['s'] >= 100000) {
+                $this->batchAchievement($minerId, 42);
+            } elseif($minerInfo['gpu']['s'] >= 10000) {
+                $this->batchAchievement($minerId, 41);
+            }
+
+            /**
+             * Mining 4 Hours at 5 days at Night Achievement
+             */
+            if($minerInfo['gpu']['hn'] >= (4*5)) {
+                $this->batchAchievement($minerId, 45);
+            } elseif($minerInfo['cpu']['hn'] >= (4*5)) {
+                $this->batchAchievement($minerId, 45);
+            }
+
+            /**
+             * Mining 4 Hours at Night Achievement
+             */
+            if($minerInfo['gpu']['hn'] >= 4) {
+                $this->batchAchievement($minerId, 44);
+            } elseif($minerInfo['cpu']['hn'] >= 4) {
+                $this->batchAchievement($minerId, 44);
+            }
+
+            /**
+             * Mining on the Weekend Achievement
+             */
+            if($minerInfo['gpu']['w'] >= 2) {
+                $this->batchAchievement($minerId, 46);
+            } elseif($minerInfo['cpu']['w'] >= 2) {
+                $this->batchAchievement($minerId, 46);
+            }
+
+            /**
+             * Mining for over a month Achievement
+             */
+            if(count($minerInfo['cpu']['d']) >= 30) {
+                $this->batchAchievement($minerId, 47);
+            } elseif(count($minerInfo['gpu']['d']) >= 30) {
+                $this->batchAchievement($minerId, 47);
+            }
+
+            /**
+             * Update Achievement Stats
+             */
+            if(!empty($minerInfo['gpu']['s']) && $minerInfo['gpu']['s'] != null) {
+                $this->updateUserSetting($minerId, 'gpuminer-totalshares', $minerInfo['gpu']['s']);
+            }
+            if(!empty($minerInfo['gpu']['hn']) && $minerInfo['gpu']['hn'] != null) {
+                $this->updateUserSetting($minerId, 'gpuminer-nighthours', $minerInfo['gpu']['hn']);
+            }
+            if(!empty($minerInfo['gpu']['d']) && $minerInfo['gpu']['d'] != null) {
+                $this->updateUserSetting($minerId, 'gpuminer-totaldays', count($minerInfo['gpu']['d']));
+            }
+            if(!empty($minerInfo['gpu']['h']) && $minerInfo['gpu']['h'] != null) {
+                $this->updateUserSetting($minerId, 'gpuminer-totalhours', $minerInfo['gpu']['h']);
+            }
+        }
+
+        echo 'done';
+
+        return false;
+    }
+
+    public function checkfaucetachievsAction()
+    {
+        $bCheck = true;
+        if (!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            $authKey = filter_var($_REQUEST['authkey'], FILTER_SANITIZE_STRING);
+            if ($authKey != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if (!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $claimTbl = new TableGateway('faucet_claim', CoreEntityController::$oDbAdapter);
+
+        $claimsByUser = [];
+
+        $claimSel = new Select($claimTbl->getTable());
+        $claimSel->order('date ASC');
+        $claimSel->where(['source' => 'website']);
+        $claimsDone = $claimTbl->selectWith($claimSel);
+        foreach($claimsDone as $claim) {
+            $date = date('Y-m-d', strtotime($claim->date));
+            if(!array_key_exists($claim->user_idfs, $claimsByUser)) {
+                $claimsByUser[$claim->user_idfs] = ['t' => 0,'d' => [],'w' => $date,'wc' => 0];
+            }
+            if(!array_key_exists($date,$claimsByUser[$claim->user_idfs]['d'])) {
+                $claimsByUser[$claim->user_idfs]['d'][$date] = 0;
+            }
+            $claimsByUser[$claim->user_idfs]['d'][$date]++;
+            if($date != $claimsByUser[$claim->user_idfs]['w']) {
+                //echo "\n - Compare dates ".$date.' / '.$claimsByUser[$claim->user_idfs]['w'];
+                if((strtotime($date)-86400) <= strtotime($claimsByUser[$claim->user_idfs]['w'])) {
+                    $claimsByUser[$claim->user_idfs]['wc']++;
+                    $claimsByUser[$claim->user_idfs]['w'] = $date;
+                } else {
+                    $claimsByUser[$claim->user_idfs]['wc'] = 0;
+                    $claimsByUser[$claim->user_idfs]['w'] = $date;
+                }
+            }
+        }
+
+        echo "Parsing Claims of ".count($claimsByUser)." Users";
+
+        foreach(array_keys($claimsByUser) as $userId) {
+            $dateBiggest = 0;
+            foreach(array_keys($claimsByUser[$userId]['d']) as $date) {
+                if($claimsByUser[$userId]['d'][$date] > $dateBiggest) {
+                    $dateBiggest = $claimsByUser[$userId]['d'][$date];
+                }
+                if($claimsByUser[$userId]['d'][$date] >= 14) {
+                    $this->batchAchievement($userId, 58);
+                    echo "\n".'User '.$userId.' has claimed achievement all day long ( '.$claimsByUser[$userId]['d'][$date] .')';
+                }
+            }
+            if($claimsByUser[$userId]['wc'] >= 7) {
+                $this->batchAchievement($userId, 31);
+                echo "\n".'User '.$userId.' has claimed achievement a daily routine ( '.$claimsByUser[$userId]['wc'] .')';
+            }
+            $this->updateUserSetting($userId, 'faucet-claimdays', $claimsByUser[$userId]['wc']);
+            $this->updateUserSetting($userId, 'faucet-claimtimes', $dateBiggest);
+        }
+
+        echo "\n".'done';
+
+        return false;
+    }
+
+    public function checkwithdrawachievsAction()
+    {
+        $bCheck = true;
+        if (!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            $authKey = filter_var($_REQUEST['authkey'], FILTER_SANITIZE_STRING);
+            if ($authKey != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if (!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $claimTbl = new TableGateway('faucet_withdraw', CoreEntityController::$oDbAdapter);
+
+        $withdrawsByUser = [];
+
+        $claimSel = new Select($claimTbl->getTable());
+        $claimSel->order('date_sent ASC');
+        $claimSel->where(['state' => 'done']);
+        $claimsDone = $claimTbl->selectWith($claimSel);
+        foreach($claimsDone as $claim) {
+            if(!array_key_exists($claim->user_idfs, $withdrawsByUser)) {
+                $withdrawsByUser[$claim->user_idfs] = ['c' => [],'w' => 0];
+            }
+            $withdrawsByUser[$claim->user_idfs]['w']++;
+            if(!array_key_exists($claim->currency,$withdrawsByUser[$claim->user_idfs]['c'])) {
+                $withdrawsByUser[$claim->user_idfs]['c'][$claim->currency];
+            }
+            $withdrawsByUser[$claim->user_idfs]['c'][$claim->currency]++;
+        }
+
+        echo "Parsing Withdrawals of ".count($withdrawsByUser)." Users";
+
+        foreach(array_keys($withdrawsByUser) as $userId) {
+            if($withdrawsByUser[$userId]['w'] >= 1) {
+                $this->batchAchievement($userId, 33);
+            }
+            if($withdrawsByUser[$userId]['w'] >= 10) {
+                $this->batchAchievement($userId, 34);
+            }
+            if(count($withdrawsByUser[$userId]['c']) >= 3) {
+                $this->batchAchievement($userId, 35);
+            }
+            if(count($withdrawsByUser[$userId]['c']) >= 6) {
+                $this->batchAchievement($userId, 36);
+            }
+            $this->updateUserSetting($userId, 'withdraw-coins', json_encode($withdrawsByUser[$userId]['c']));
+            $this->updateUserSetting($userId, 'withdraw-total', $withdrawsByUser[$userId]['w']);
+        }
+
+        echo "\n".'done';
+
+        return false;
+    }
+
+    public function checktransactionachievsAction()
+    {
+        $bCheck = true;
+        if (!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            $authKey = filter_var($_REQUEST['authkey'], FILTER_SANITIZE_STRING);
+            if ($authKey != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if (!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $claimTbl = new TableGateway('faucet_transaction', CoreEntityController::$oDbAdapter);
+
+        $withdrawsByUser = [];
+
+        $claimSel = new Select($claimTbl->getTable());
+        $claimSel->order('date ASC');
+        $claimSel->where(['is_output' => 0]);
+        $claimsDone = $claimTbl->selectWith($claimSel);
+        foreach($claimsDone as $claim) {
+            if(!array_key_exists($claim->user_idfs, $withdrawsByUser)) {
+                $withdrawsByUser[$claim->user_idfs] = ['c' => 0];
+            }
+            $withdrawsByUser[$claim->user_idfs]['c']+=$claim->amount;
+        }
+
+        echo "Parsing Transactions of ".count($withdrawsByUser)." Users";
+
+        foreach(array_keys($withdrawsByUser) as $userId) {
+            if($withdrawsByUser[$userId]['c'] >= 1000) {
+                $this->batchAchievement($userId, 6);
+            }
+            if($withdrawsByUser[$userId]['c'] >= 5000) {
+                $this->batchAchievement($userId, 7);
+            }
+            if($withdrawsByUser[$userId]['c'] >= 10000) {
+                $this->batchAchievement($userId, 8);
+            }
+            if($withdrawsByUser[$userId]['c'] >= 25000) {
+                $this->batchAchievement($userId, 9);
+            }
+            if($withdrawsByUser[$userId]['c'] >= 50000) {
+                $this->batchAchievement($userId, 10);
+            }
+            if($withdrawsByUser[$userId]['c'] >= 100000) {
+                $this->batchAchievement($userId, 11);
+            }
+            if($withdrawsByUser[$userId]['c'] >= 250000) {
+                $this->batchAchievement($userId, 12);
+            }
+            if($withdrawsByUser[$userId]['c'] >= 500000) {
+                $this->batchAchievement($userId, 13);
+            }
+            if($withdrawsByUser[$userId]['c'] >= 1000000) {
+                $this->batchAchievement($userId, 14);
+            }
+            $this->updateUserSetting($userId, 'totalearned-coins', json_encode($withdrawsByUser[$userId]['c']));
+        }
+
+        echo "\n".'done';
+
+        return false;
+    }
+
+    public function checkbchpaymentsAction() {
+        $bCheck = true;
+        if(!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            $authKey = filter_var($_REQUEST['authkey'], FILTER_SANITIZE_STRING);
+            if($authKey != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if(!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $sBCHNodeUrl = CoreEntityController::$aGlobalSettings['bchnode-rpcurl'];
+        $paymentTbl = new TableGateway('faucet_tokenbuy', CoreEntityController::$oDbAdapter);
+        $payments = $paymentTbl->select(['received' => 0,'coin' => 'BCH']);
+        if(count($payments) > 0) {
+
+            echo 'processing '.count($payments).' payments';
+
+            foreach($payments as $payment) {
+                if($payment->wallet_receive != NULL) {
+                    $wallRec = str_replace(['bitcoincash:'],[''],$payment->wallet_receive);
+                    $client = new Client();
+                    $client->setUri($sBCHNodeUrl);
+                    $client->setMethod('POST');
+                    $client->setRawBody('{"jsonrpc":"2.0","id":"curltext","method":"getreceivedbyaddress","params":["'.$wallRec.'"]}');
+                    $response = $client->send();
+                    $googleResponse = json_decode($response->getBody());
+                    $walletReceive = (float)$googleResponse->result;
+                    if($walletReceive == $payment->price) {
+                        $paymentTbl->update([
+                            'received' => 1,
+                        ],[
+                            'Buy_ID' => $payment->Buy_ID,
+                        ]);
+                        echo "\n".$wallRec.' = '.$walletReceive.' payment of '.$payment->price. 'received!';
+                    } else {
+                        echo "\n".$wallRec.' = '.$walletReceive.' should be '.$payment->price;
+                    }
+                } else {
+                    echo "\n"."skip";
+                }
+            }
+        } else {
+            echo 'no payments to process currently';
+        }
+
+        echo "\n\n"."done";
+
+        return false;
+    }
+
+    private function batchAchievement($userId, $achievId) {
+        $achiev = $this->achievTbl->select(['Achievement_ID' => $achievId]);
+        if(count($achiev) == 0) {
+            return false;
+        }
+        $achievCheck = $this->achievDoneTbl->select([
+            'user_idfs' => $userId,
+            'achievement_idfs' => $achievId
+        ]);
+        if(count($achievCheck) == 0) {
+            $achiev = $achiev->current();
+            echo "\n"." User ".$userId." earned Achievement ".$achiev->label;
+            $this->achievDoneTbl->insert([
+                'user_idfs' => $userId,
+                'achievement_idfs' => $achievId,
+                'date' => date('Y-m-d H:i:s', time()),
+            ]);
+        }
     }
 
     /**
@@ -2018,6 +2739,20 @@ class BatchController extends CoreEntityController
             }
         } else {
             return false;
+        }
+    }
+
+    private function updateUserSetting($userId, $settingName, $settingValue) {
+        $setCheck = $this->userSetTbl->select(['user_idfs' => $userId,'setting_name' => $settingName]);
+        if(count($setCheck) == 0) {
+            $this->userSetTbl->insert([
+                'user_idfs' => $userId,'setting_name' => $settingName,'setting_value' => $settingValue]);
+        } else {
+            $this->userSetTbl->update([
+                'setting_value' => $settingValue
+            ],[
+                'user_idfs' => $userId,'setting_name' => $settingName
+            ]);
         }
     }
 }
