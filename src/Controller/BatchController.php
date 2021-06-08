@@ -977,7 +977,8 @@ class BatchController extends CoreEntityController
         }
         $this->layout('layout/json');
 
-        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/etc/sharesperworker/0x9b79a4ad71e6f1db71adc5b4f0dddbee4c1bcad1/1');
+        $hours = 17;
+        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/etc/sharesperworker/0x9b79a4ad71e6f1db71adc5b4f0dddbee4c1bcad1/'.$hours);
         $oApiData = json_decode($sApiINfo);
 
         $oMinerTbl = $this->getCustomTable('faucet_miner');
@@ -987,7 +988,7 @@ class BatchController extends CoreEntityController
 
         $oSetTbl = $this->getCustomTable('user_setting');
 
-        $sApiINfoHash = file_get_contents('https://api.nanopool.org/v1/etc/avghashratelimited/0x9b79a4ad71e6f1db71adc5b4f0dddbee4c1bcad1/1');
+        $sApiINfoHash = file_get_contents('https://api.nanopool.org/v1/etc/avghashratelimited/0x9b79a4ad71e6f1db71adc5b4f0dddbee4c1bcad1/'.$hours);
         $oApiDataHash = json_decode($sApiINfoHash);
 
         $fTotalShares = 0;
@@ -2256,9 +2257,11 @@ class BatchController extends CoreEntityController
              */
             if($minerInfo['gpu']['s'] >= 1000000) {
                 $this->batchAchievement($minerId, 43);
-            } elseif($minerInfo['gpu']['s'] >= 100000) {
+            }
+            if($minerInfo['gpu']['s'] >= 100000) {
                 $this->batchAchievement($minerId, 42);
-            } elseif($minerInfo['gpu']['s'] >= 10000) {
+            }
+            if($minerInfo['gpu']['s'] >= 10000) {
                 $this->batchAchievement($minerId, 41);
             }
 
@@ -2515,6 +2518,63 @@ class BatchController extends CoreEntityController
                 $this->batchAchievement($userId, 14);
             }
             $this->updateUserSetting($userId, 'totalearned-coins', json_encode($withdrawsByUser[$userId]['c']));
+        }
+
+        echo "\n".'done';
+
+        return false;
+    }
+
+    public function checkofferwallachievsAction()
+    {
+        $bCheck = true;
+        if (!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            $authKey = filter_var($_REQUEST['authkey'], FILTER_SANITIZE_STRING);
+            if ($authKey != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if (!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $claimTbl = new TableGateway('offerwall_user', CoreEntityController::$oDbAdapter);
+
+        $withdrawsByUser = [];
+
+        $claimSel = new Select($claimTbl->getTable());
+        $claimSel->order('date_completed ASC');
+        $claimsDone = $claimTbl->selectWith($claimSel);
+        foreach($claimsDone as $claim) {
+            if(!array_key_exists($claim->user_idfs, $withdrawsByUser)) {
+                $withdrawsByUser[$claim->user_idfs] = ['c' => 0,'a' => 0];
+            }
+            $withdrawsByUser[$claim->user_idfs]['c']+=$claim->amount;
+            $withdrawsByUser[$claim->user_idfs]['a']++;
+        }
+
+        echo "Parsing Offers done of ".count($withdrawsByUser)." Users";
+
+        foreach(array_keys($withdrawsByUser) as $userId) {
+            if($withdrawsByUser[$userId]['a'] >= 50) {
+                $this->batchAchievement($userId, 19);
+            }
+            if($withdrawsByUser[$userId]['a'] >= 250) {
+                $this->batchAchievement($userId, 20);
+            }
+            if($withdrawsByUser[$userId]['a'] >= 500) {
+                $this->batchAchievement($userId, 21);
+            }
+            if($withdrawsByUser[$userId]['a'] >= 1000) {
+                $this->batchAchievement($userId, 22);
+            }
+
+            $this->updateUserSetting($userId, 'totaloffers-coins', $withdrawsByUser[$userId]['c']);
+            $this->updateUserSetting($userId, 'totaloffers-amount', $withdrawsByUser[$userId]['a']);
         }
 
         echo "\n".'done';
