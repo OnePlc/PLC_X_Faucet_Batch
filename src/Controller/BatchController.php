@@ -1680,6 +1680,29 @@ class BatchController extends CoreEntityController
             }
         }
 
+        # set hashrate to 0 for all miners gone
+        $aMinersActive = $oSetTbl->select(['setting_name' => 'cpuminer-currenthashrate']);
+        foreach($aMinersActive as $oActive) {
+            if($oActive->user_idfs == 0) {
+                continue;
+            }
+            if(!array_key_exists($oActive->user_idfs,$aMinersToPay)) {
+                $oSetTbl->update(['setting_value' => 0],
+                    [
+                        'user_idfs' => $oActive->user_idfs,
+                        'setting_name' => 'cpuminer-currenthashrate',
+                    ]
+                );
+                $oSetTbl->delete(
+                    [
+                        'user_idfs' => $oActive->user_idfs,
+                        'setting_name' => 'cpuminer-currentpool',
+                    ]
+                );
+            }
+        }
+
+
         echo 'done. Found '.$minersFound.' @ '.$fTotalHash.' MH/s - '.$fTotalShares.' shares = $ '.$earns->data->hour->dollars;
 
         return false;
@@ -2157,14 +2180,16 @@ class BatchController extends CoreEntityController
         $this->layout('layout/json');
 
         $minerTbl = new TableGateway('faucet_miner', CoreEntityController::$oDbAdapter);
+        $inventoryTbl = new TableGateway('faucet_item_user', CoreEntityController::$oDbAdapter);
 
         $minerInfoByUser = [];
         $minersInfo = $minerTbl->select();
         foreach($minersInfo as $mi) {
             if(!array_key_exists($mi->user_idfs,$minerInfoByUser)) {
                 $minerInfoByUser[$mi->user_idfs] = [
-                    'gpu' => ['h' => 0,'s' => 0,'d' => [],'hn' => 0,'w' => 0],
-                    'cpu' => ['h' => 0,'s' => 0,'d' => [],'hn' => 0,'w' => 0],
+                    'gpu' => ['h' => 0,'s' => 0,'d' => [],'hn' => 0,'w' => 0,'c' => 0,'m' => 0],
+                    'gpuetc' => ['s' => 0,'c' => 0,'m' => 0],
+                    'cpu' => ['h' => 0,'s' => 0,'d' => [],'hn' => 0,'w' => 0,'m' => 0,'c' => 0],
                     'web' => ['h' => 0,'s' => 0,'d' => [],'hn' => 0,'w' => 0]
                 ];
             }
@@ -2173,8 +2198,23 @@ class BatchController extends CoreEntityController
 
             switch($mi->coin) {
                 case 'etc':
+                    $minerInfoByUser[$mi->user_idfs]['gpuetc']['s']+=$mi->shares;
+                    $minerInfoByUser[$mi->user_idfs]['gpu']['h']++;
+                    $minerInfoByUser[$mi->user_idfs]['gpuetc']['c']+=$mi->amount_coin;
+                    $minerInfoByUser[$mi->user_idfs]['gpu']['d'][date('Y-m-d', strtotime($mi->date))] = 1;
+                    if($miningHour >= 20 || $miningHour <= 6) {
+                        $minerInfoByUser[$mi->user_idfs]['gpu']['hn']++;
+                    }
+                    if($miningDay == 0 || $miningDay == 6) {
+                        $minerInfoByUser[$mi->user_idfs]['gpu']['w']++;
+                    }
+                    if(strtotime($mi->date) >= strtotime('first day of this month')) {
+                        $minerInfoByUser[$mi->user_idfs]['gpuetc']['m']+=$mi->amount_coin;
+                    }
+                    break;
                 case 'rvn':
                     $minerInfoByUser[$mi->user_idfs]['gpu']['s']+=$mi->shares;
+                    $minerInfoByUser[$mi->user_idfs]['gpu']['c']+=$mi->amount_coin;
                     $minerInfoByUser[$mi->user_idfs]['gpu']['h']++;
                     $minerInfoByUser[$mi->user_idfs]['gpu']['d'][date('Y-m-d', strtotime($mi->date))] = 1;
                     if($miningHour >= 20 || $miningHour <= 6) {
@@ -2183,13 +2223,17 @@ class BatchController extends CoreEntityController
                     if($miningDay == 0 || $miningDay == 6) {
                         $minerInfoByUser[$mi->user_idfs]['gpu']['w']++;
                     }
-                break;
+                    if(strtotime($mi->date) >= strtotime('first day of this month')) {
+                        $minerInfoByUser[$mi->user_idfs]['gpu']['m']+=$mi->amount_coin;
+                    }
+                    break;
                 case 'wmp':
                     $minerInfoByUser[$mi->user_idfs]['web']['s']+=$mi->shares;
                     $minerInfoByUser[$mi->user_idfs]['web']['h']++;
                     break;
                 case 'xmr':
                     $minerInfoByUser[$mi->user_idfs]['cpu']['s']+=$mi->shares;
+                    $minerInfoByUser[$mi->user_idfs]['cpu']['c']+=$mi->amount_coin;
                     $minerInfoByUser[$mi->user_idfs]['cpu']['h']++;
                     $minerInfoByUser[$mi->user_idfs]['cpu']['d'][date('Y-m-d', strtotime($mi->date))] = 1;
                     if($miningHour >= 20 || $miningHour <= 6) {
@@ -2197,6 +2241,9 @@ class BatchController extends CoreEntityController
                     }
                     if($miningDay == 0 || $miningDay == 6) {
                         $minerInfoByUser[$mi->user_idfs]['cpu']['w']++;
+                    }
+                    if(strtotime($mi->date) >= strtotime('first day of this month')) {
+                        $minerInfoByUser[$mi->user_idfs]['cpu']['m']+=$mi->amount_coin;
                     }
                     break;
                 default:
@@ -2302,10 +2349,73 @@ class BatchController extends CoreEntityController
             }
 
             /**
+             * Update Counters
+             */
+            if(!empty($minerInfo['gpu']['m']) && $minerInfo['gpu']['m'] != null) {
+                $this->updateUserSetting($minerId, 'gpuminer-rvn-month', $minerInfo['gpu']['m']);
+            }
+            if(!empty($minerInfo['gpuetc']['m']) && $minerInfo['gpuetc']['m'] != null) {
+                $this->updateUserSetting($minerId, 'gpuminer-etc-month', $minerInfo['gpuetc']['m']);
+            }
+            if(!empty($minerInfo['cpu']['m']) && $minerInfo['cpu']['m'] != null) {
+                $this->updateUserSetting($minerId, 'cpuminer-month', $minerInfo['cpu']['m']);
+            }
+            if(!empty($minerInfo['cpu']['c']) && $minerInfo['cpu']['c'] != null) {
+                $this->updateUserSetting($minerId, 'cpuminer-totalcoins', $minerInfo['cpu']['c']);
+            }
+
+            /**
              * Update Achievement Stats
              */
             if(!empty($minerInfo['gpu']['s']) && $minerInfo['gpu']['s'] != null) {
                 $this->updateUserSetting($minerId, 'gpuminer-totalshares', $minerInfo['gpu']['s']);
+            }
+            if(!empty($minerInfo['gpu']['c']) && $minerInfo['gpu']['c'] != null) {
+                $minerGems = round($minerInfo['gpu']['c']/50000);
+                $gemsFound = $inventoryTbl->select(['user_idfs' => $minerId,'item_idfs' => 20])->count();
+                if($minerGems > $gemsFound) {
+                    $gemsToAdd = $minerGems-$gemsFound;
+                    for($i = 0;$i < $gemsToAdd;$i++) {
+                        $inventoryTbl->insert([
+                            'item_idfs' => 20,
+                            'user_idfs' => $minerId,
+                            'date_created' => date('Y-m-d H:i:s', time()),
+                            'date_received' => date('Y-m-d H:i:s', time()),
+                            'comment' => 'Find while Mining RVN',
+                            'hash' => password_hash('20'.$minerId.'Find while Mining RVN', PASSWORD_DEFAULT),
+                            'created_by' => 1,
+                            'received_from' => 1,
+                            'used' => 0,
+                        ]);
+                    }
+                }
+                echo "\n".'Miner '.$minerId.' has '.$gemsFound.' and should have '.$minerGems.' with '.$minerInfo['gpu']['c'].' Coins';
+                $this->updateUserSetting($minerId, 'gpuminer-totalcoins', $minerInfo['gpu']['c']);
+            }
+            if(!empty($minerInfo['gpuetc']['c']) && $minerInfo['gpuetc']['c'] != null) {
+                $minerGems = round($minerInfo['gpuetc']['c']/50000);
+                $gemsFound = $inventoryTbl->select(['user_idfs' => $minerId,'item_idfs' => 19])->count();
+                if($minerGems > $gemsFound) {
+                    $gemsToAdd = $minerGems-$gemsFound;
+                    for($i = 0;$i < $gemsToAdd;$i++) {
+                        $inventoryTbl->insert([
+                            'item_idfs' => 19,
+                            'user_idfs' => $minerId,
+                            'date_created' => date('Y-m-d H:i:s', time()),
+                            'date_received' => date('Y-m-d H:i:s', time()),
+                            'comment' => 'Find while Mining ETC',
+                            'hash' => password_hash('20'.$minerId.'Find while Mining ETC', PASSWORD_DEFAULT),
+                            'created_by' => 1,
+                            'received_from' => 1,
+                            'used' => 0,
+                        ]);
+                    }
+                }
+                echo "\n".'Miner '.$minerId.' has '.$gemsFound.' and should have '.$minerGems.' with '.$minerInfo['gpuetc']['c'].' Coins';
+                $this->updateUserSetting($minerId, 'gpuminer-etc-totalcoins', $minerInfo['gpuetc']['c']);
+            }
+            if(!empty($minerInfo['gpuetc']['s']) && $minerInfo['gpuetc']['s'] != null) {
+                $this->updateUserSetting($minerId, 'gpuminer-etc-totalshares', $minerInfo['gpuetc']['s']);
             }
             if(!empty($minerInfo['gpu']['hn']) && $minerInfo['gpu']['hn'] != null) {
                 $this->updateUserSetting($minerId, 'gpuminer-nighthours', $minerInfo['gpu']['hn']);
@@ -2351,11 +2461,15 @@ class BatchController extends CoreEntityController
         foreach($claimsDone as $claim) {
             $date = date('Y-m-d', strtotime($claim->date));
             if(!array_key_exists($claim->user_idfs, $claimsByUser)) {
-                $claimsByUser[$claim->user_idfs] = ['t' => 0,'d' => [],'w' => $date,'wc' => 0];
+                $claimsByUser[$claim->user_idfs] = ['t' => 0,'d' => [],'w' => $date,'wc' => 0,'c' => 0,'c7' => 0];
             }
             if(!array_key_exists($date,$claimsByUser[$claim->user_idfs]['d'])) {
                 $claimsByUser[$claim->user_idfs]['d'][$date] = 0;
             }
+            if(strtotime($date) >= strtotime('last wednesday')) {
+                $claimsByUser[$claim->user_idfs]['c7']++;
+            }
+            $claimsByUser[$claim->user_idfs]['c']++;
             $claimsByUser[$claim->user_idfs]['d'][$date]++;
             if($date != $claimsByUser[$claim->user_idfs]['w']) {
                 //echo "\n - Compare dates ".$date.' / '.$claimsByUser[$claim->user_idfs]['w'];
@@ -2388,6 +2502,8 @@ class BatchController extends CoreEntityController
             }
             $this->updateUserSetting($userId, 'faucet-claimdays', $claimsByUser[$userId]['wc']);
             $this->updateUserSetting($userId, 'faucet-claimtimes', $dateBiggest);
+            $this->updateUserSetting($userId, 'faucet-claimtotal', $claimsByUser[$userId]['c']);
+            $this->updateUserSetting($userId, 'faucet-claim7d', $claimsByUser[$userId]['c7']);
         }
 
         echo "\n".'done';
@@ -2525,6 +2641,63 @@ class BatchController extends CoreEntityController
         return false;
     }
 
+    public function checkshortlinkachievsAction()
+    {
+        $bCheck = true;
+        if (!isset($_REQUEST['authkey'])) {
+            $bCheck = false;
+        } else {
+            $authKey = filter_var($_REQUEST['authkey'], FILTER_SANITIZE_STRING);
+            if ($authKey != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
+                $bCheck = false;
+            }
+        }
+
+        if (!$bCheck) {
+            return $this->redirect()->toRoute('home');
+        }
+        $this->layout('layout/json');
+
+        $claimTbl = new TableGateway('shortlink_link_user', CoreEntityController::$oDbAdapter);
+
+        $withdrawsByUser = [];
+        $linksDoneThisMonth = [];
+        $oWh = new Where();
+        $oWh->notLike('date_completed', '0000-00-00 00:00:00');
+        $claimSel = new Select($claimTbl->getTable());
+        $claimSel->order('date_claimed ASC');
+        $claimSel->where($oWh);
+        $claimsDone = $claimTbl->selectWith($claimSel);
+        foreach($claimsDone as $claim) {
+            if(!array_key_exists($claim->user_idfs, $withdrawsByUser)) {
+                $withdrawsByUser[$claim->user_idfs] = ['c' => 0];
+            }
+            $withdrawsByUser[$claim->user_idfs]['c']++;
+
+            if(strtotime($claim->date_claimed) >= strtotime("first day of this month")) {
+                if(!array_key_exists($claim->user_idfs, $linksDoneThisMonth)) {
+                    $linksDoneThisMonth[$claim->user_idfs] = ['c' => 0];
+                }
+                $linksDoneThisMonth[$claim->user_idfs]['c']++;
+            }
+        }
+
+        echo "Parsing Shortlinks of ".count($withdrawsByUser)." Users";
+        echo "\nParsing Shortlinks of ".count($linksDoneThisMonth)." Users (this month)";
+
+        foreach(array_keys($withdrawsByUser) as $userId) {
+            $this->updateUserSetting($userId, 'shortlinks-total', json_encode($withdrawsByUser[$userId]['c']));
+        }
+
+        foreach(array_keys($linksDoneThisMonth) as $userId) {
+            $this->updateUserSetting($userId, 'shortlinks-month', json_encode($linksDoneThisMonth[$userId]['c']));
+        }
+
+        echo "\n".'done';
+
+        return false;
+    }
+
     public function checkofferwallachievsAction()
     {
         $bCheck = true;
@@ -2545,16 +2718,24 @@ class BatchController extends CoreEntityController
         $claimTbl = new TableGateway('offerwall_user', CoreEntityController::$oDbAdapter);
 
         $withdrawsByUser = [];
+        $withdrawsByUserMonth = [];
 
         $claimSel = new Select($claimTbl->getTable());
         $claimSel->order('date_completed ASC');
         $claimsDone = $claimTbl->selectWith($claimSel);
         foreach($claimsDone as $claim) {
             if(!array_key_exists($claim->user_idfs, $withdrawsByUser)) {
-                $withdrawsByUser[$claim->user_idfs] = ['c' => 0,'a' => 0];
+                $withdrawsByUser[$claim->user_idfs] = ['c' => 0,'a' => 0,'cc' => 0];
             }
             $withdrawsByUser[$claim->user_idfs]['c']+=$claim->amount;
             $withdrawsByUser[$claim->user_idfs]['a']++;
+            $withdrawsByUser[$claim->user_idfs]['cc']++;
+            if(strtotime($claim->date_claimed) >= strtotime("first day of this month")) {
+                if(!array_key_exists($claim->user_idfs, $withdrawsByUserMonth)) {
+                    $withdrawsByUserMonth[$claim->user_idfs] = ['c' => 0];
+                }
+                $withdrawsByUserMonth[$claim->user_idfs]['c']++;
+            }
         }
 
         echo "Parsing Offers done of ".count($withdrawsByUser)." Users";
@@ -2575,6 +2756,11 @@ class BatchController extends CoreEntityController
 
             $this->updateUserSetting($userId, 'totaloffers-coins', $withdrawsByUser[$userId]['c']);
             $this->updateUserSetting($userId, 'totaloffers-amount', $withdrawsByUser[$userId]['a']);
+            $this->updateUserSetting($userId, 'totaloffers-count', $withdrawsByUser[$userId]['cc']);
+        }
+
+        foreach(array_keys($withdrawsByUserMonth) as $userId) {
+            $this->updateUserSetting($userId, 'totaloffers-month', $withdrawsByUserMonth[$userId]['c']);
         }
 
         echo "\n".'done';
