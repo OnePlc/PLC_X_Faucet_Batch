@@ -1513,6 +1513,35 @@ class BatchController extends CoreEntityController
         //
     }
 
+    public function generateuserchattagsAction() {
+        $this->layout('layout/json');
+
+        $usrTbl = new TableGateway('user', CoreEntityController::$oDbAdapter);
+        $noTagUsers = $usrTbl->select();
+        foreach($noTagUsers as $usr) {
+            $usrBase = $usr->username;
+            $hasMail = stripos($usr->username,'@');
+            if($hasMail === false) {
+            } else {
+                $usrBase = explode('@', $usr->username)[0];
+            }
+            $tag = str_replace([
+                ' ','ö','ä','ü','@gmail.com','@yahoo.com','@mail.ru','@outlook.es','@hotmail.com','@ukr.net',
+                    '@outlook.com','Outlook.es','.com','@'
+                ],[
+                    '.','o','a','u','','','','','','','','','',''
+                ], substr($usrBase, 0, 100)).'#'.substr($usr->User_ID,strlen($usr->User_ID)-4);
+
+            $usrTbl->update([
+                'friend_tag' => $tag,
+            ],['User_ID' => $usr->User_ID]);
+        }
+
+        echo 'gen tags';
+
+        return false;
+    }
+
     public function fetchxmrnanosharesAction()
     {
         $bCheck = true;
@@ -1928,7 +1957,11 @@ class BatchController extends CoreEntityController
         $weeklyClaimTbl = new TableGateway('faucet_guild_weekly_claim', CoreEntityController::$oDbAdapter);
         $guilds = $guildTbl->select();
 
+        $weekDay = date('w', time());
         $weeklyStart = date('Y-m-d H:i:s', strtotime("last wednesday"));
+        if($weekDay == 3) {
+            $weeklyStart = date('Y-m-d H:i:s', time());
+        }
 
         foreach($guilds as $guild) {
             $guildInfo = ['faucet_claims' => 0,'shortlinks' => 0,'gpushares' => 0];
@@ -1990,14 +2023,14 @@ class BatchController extends CoreEntityController
             }
 
             # check claims
-            if($guildInfo['faucet_claims'] >= 350) {
+            if($guildInfo['faucet_claims'] >= 1000) {
                 $claimWh = new Where();
                 $claimWh->equalTo('guild_idfs', $guild->Guild_ID);
                 $claimWh->equalTo('week', date('W', strtotime($weeklyStart)));
                 $claimWh->equalTo('weekly_idfs', 2);
                 $weeklyClaimedFaucet = $weeklyClaimTbl->select($claimWh);
                 if(count($weeklyClaimedFaucet) == 0) {
-                    $transID = $this->executeGuildTransaction(1000, false, (int)$guild->Guild_ID, 2, 'weekly-task', 'Weekly Task 350 Faucet Claim complete', 1);
+                    $transID = $this->executeGuildTransaction(1000, false, (int)$guild->Guild_ID, 2, 'weekly-task', 'Weekly Task 1000 Faucet Claim complete', 1);
                     $weeklyClaimTbl->insert([
                         'guild_idfs' => $guild->Guild_ID,
                         'week' => date('W', strtotime($weeklyStart)),
@@ -2542,7 +2575,7 @@ class BatchController extends CoreEntityController
             }
             $withdrawsByUser[$claim->user_idfs]['w']++;
             if(!array_key_exists($claim->currency,$withdrawsByUser[$claim->user_idfs]['c'])) {
-                $withdrawsByUser[$claim->user_idfs]['c'][$claim->currency];
+                $withdrawsByUser[$claim->user_idfs]['c'][$claim->currency] = 0;
             }
             $withdrawsByUser[$claim->user_idfs]['c'][$claim->currency]++;
         }
