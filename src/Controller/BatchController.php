@@ -1156,586 +1156,142 @@ class BatchController extends CoreEntityController
         //
     }
 
-    public function fetchcfxnanosharesAction()
-    {
-        $bCheck = true;
-        if(!isset($_REQUEST['authkey'])) {
-            $bCheck = false;
-        } else {
-            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
-                $bCheck = false;
-            }
-        }
-
-        if(!$bCheck) {
-            return $this->redirect()->toRoute('home');
-        }
+    public function calcminingcontestrankAction() {
         $this->layout('layout/json');
 
-        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/cfx/sharesperworker/aatv9rfhsh3t7n7z1nat36pfbwfkgf04epu5cv0b54/1');
-        $oApiData = json_decode($sApiINfo);
+        $statTbl = new TableGateway('user_faucet_stat', CoreEntityController::$oDbAdapter);
+        $contestTbl = new TableGateway('faucet_statistic', CoreEntityController::$oDbAdapter);
 
-        $oMinerTbl = $this->getCustomTable('faucet_miner');
-        $oUsrTbl = $this->getCustomTable('user');
-        $minersFound = 0;
-        $fTotalHash = 0;
+        $statsByUser = [];
 
-        $oSetTbl = $this->getCustomTable('user_setting');
+        $etcShares = $statTbl->select(['stat_key' => 'nano-coin-m-etc-'.date('m-Y',time())]);
+        foreach($etcShares as $sh) {
+            if(!array_key_exists($sh->user_idfs,$statsByUser)) {
+                $statsByUser[$sh->user_idfs] = 0;
+            }
+            $statsByUser[$sh->user_idfs]+=$sh->stat_data;
+        }
 
-        $sApiINfoHash = file_get_contents('https://api.nanopool.org/v1/cfx/avghashratelimited/aatv9rfhsh3t7n7z1nat36pfbwfkgf04epu5cv0b54/1');
-        $oApiDataHash = json_decode($sApiINfoHash);
+        $rvnShares = $statTbl->select(['stat_key' => 'nano-coin-m-rvn-'.date('m-Y',time())]);
+        foreach($rvnShares as $sh) {
+            if(!array_key_exists($sh->user_idfs,$statsByUser)) {
+                $statsByUser[$sh->user_idfs] = 0;
+            }
+            $statsByUser[$sh->user_idfs]+=$sh->stat_data;
+        }
 
-        $fTotalShares = 0;
-        $fTotalHash = $oApiDataHash->data;
-        $aMinersToPay = [];
-        if(isset($oApiData->data)) {
-            foreach($oApiData->data as $oW) {
-                $bIsFaucetMiner = stripos($oW->worker,'swissfaucetio');
-                $bIsHackerAchiev = stripos($oW->worker,'hacker');
-                if($bIsHackerAchiev === false) {
+        arsort($statsByUser);
 
-                } else {
-                    $iUserID = substr($oW->worker,strlen('hacker'));
-                    $oMinerUser = false;
-                    try {
-                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
-                    } catch(\RuntimeException $e) {
-                        # user not found
-                    }
-
-                    $this->batchAchievement($iUserID, 48);
-                }
-                if($bIsFaucetMiner === false) {
-                    # ignore
-                } else {
-                    $iUserID = substr($oW->worker,strlen('swissfaucetio'));
-                    $oMinerUser = false;
-                    try {
-                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
-                    } catch(\RuntimeException $e) {
-                        # user not found
-                    }
-                    if($oMinerUser) {
-                        $minersFound++;
-                        $iCurrentShares = $oW->shares;
-                        $fTotalShares+= $oW->shares;
-                        $oLastEntryWh = new Where();
-                        $oLastEntryWh->equalTo('user_idfs', $oMinerUser->getID());
-                        $oLastEntryWh->greaterThanOrEqualTo('date', date('Y-m-d H:i:s', strtotime('-50 minutes')));
-                        $oLastEntryWh->like('coin', 'cfx');
-
-                        $oLastSel = new Select($oMinerTbl->getTable());
-                        $oLastSel->where($oLastEntryWh);
-                        $oLastSel->order('date DESC');
-                        $oLastSel->limit(1);
-
-                        if($iCurrentShares < 0) {
-                            $iCurrentShares = 0;
-                        }
-
-                        $oLastEntry = $oMinerTbl->selectWith($oLastSel);
-                        if(count($oLastEntry) == 0) {
-                            $aMinersToPay[$oMinerUser->getID()] = $iCurrentShares;
-                        } else {
-                            echo 'miner shares already parsed within last 60 minutes - ignoring';
-                        }
-                    }
-                }
+        $rank = 1;
+        $topList = [];
+        foreach(array_keys($statsByUser) as $top) {
+            echo $rank.': '.$top.' = '.$statsByUser[$top];
+            $topList[] = ['rank' => $rank,'id' => $top, 'coins' => round($statsByUser[$top],2)];
+            $rank++;
+            if($rank > 3) {
+                break;
             }
         }
 
-        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/cfx/approximated_earnings/'.$fTotalHash);
-        $earns = json_decode($sApiINfo);
-
-        $fTotalPay = $earns->data->hour->dollars*.8;
-
-        foreach(array_keys($aMinersToPay) as $iMiner) {
-            $iShares = $aMinersToPay[$iMiner];
-            $myPerc = (100/($fTotalShares/$iShares)/100);
-            $myPayDollar = $fTotalPay*$myPerc;
-            $myPayCoin = round($myPayDollar*25000);
-
-            $oMinerTbl->insert([
-                'user_idfs' => $iMiner,
-                'rating' => $iShares,
-                'shares' => $iShares,
-                'amount_coin' => $myPayCoin,
+        $rankEx = $contestTbl->select(['stat-key' => 'congpu-'.date('m-Y', time())]);
+        if($rankEx->count() == 0) {
+            $contestTbl->insert([
+                'stat-key' => 'congpu-'.date('m-Y', time()),
                 'date' => date('Y-m-d H:i:s', time()),
-                'coin' => 'cfx',
-                'pool' => 'nanopool',
+                'stat-data' => json_encode($topList)
             ]);
-
-            if($myPayCoin > 0) {
-                $newBalance = $this->executeTransaction($myPayCoin, false, $iMiner, $iShares, 'cfx-nanoshares', ($myPerc*100).'% of all shares on pool. dollar val = '.$myPayDollar);
-            }
-            echo 'Miner '.$iMiner.' has '.($myPerc*100).'% of shares = '.$myPayCoin.' Coins @ $ '.$myPayDollar. ' - new balance = '.$newBalance;
-
-        }
-
-        # update hashrates for users
-        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/cfx/avghashrateworkers/aatv9rfhsh3t7n7z1nat36pfbwfkgf04epu5cv0b54/1');
-        $workers = json_decode($sApiINfo);
-
-        if(isset($workers->data)) {
-            if(is_array($workers->data)) {
-                foreach($workers->data as $worker) {
-                    $userId = substr($worker->worker,strlen('swissfaucetio'));
-                    $oMinerUser = false;
-                    try {
-                        $oMinerUser = $this->oTableGateway->getSingle($userId);
-                    } catch(\RuntimeException $e) {
-
-                    }
-
-                    if($oMinerUser) {
-                        $oHrCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'gpuminer-currenthashrate']);
-                        if(count($oHrCheck) == 0) {
-                            $oSetTbl->insert([
-                                'user_idfs' => $userId,
-                                'setting_name' => 'gpuminer-currenthashrate',
-                                'setting_value' => $worker->hashrate
-                            ]);
-                        } else {
-                            $oSetTbl->update([
-                                'setting_value' => $worker->hashrate
-                            ], [
-                                'user_idfs' => $userId,
-                                'setting_name' => 'gpuminer-currenthashrate',
-                            ]);
-                        }
-                        $oHrTyCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'gpuminer-currentpool']);
-                        if(count($oHrTyCheck) == 0) {
-                            $oSetTbl->insert([
-                                'user_idfs' => $userId,
-                                'setting_name' => 'gpuminer-currentpool',
-                                'setting_value' => 'cfx'
-                            ]);
-                        } else {
-                            $oSetTbl->update([
-                                'setting_value' => 'cfx'
-                            ], [
-                                'user_idfs' => $userId,
-                                'setting_name' => 'gpuminer-currentpool',
-                            ]);
-                        }
-                    }
-                }
-            }
-        }
-
-        echo 'done. Found '.$minersFound.' @ '.$fTotalHash.' MH/s - '.$fTotalShares.' shares = $ '.$earns->data->hour->dollars;
-
-        return false;
-        //
-    }
-
-    public function fetchrvnnanosharesAction()
-    {
-        $bCheck = true;
-        if(!isset($_REQUEST['authkey'])) {
-            $bCheck = false;
         } else {
-            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
-                $bCheck = false;
-            }
-        }
-
-        if(!$bCheck) {
-            return $this->redirect()->toRoute('home');
-        }
-        $this->layout('layout/json');
-
-        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/rvn/sharesperworker/RQMwgG6sY3aby48Hdo7MdQUHZUTUvACCcT/1');
-        $oApiData = json_decode($sApiINfo);
-
-        $oMinerTbl = $this->getCustomTable('faucet_miner');
-        $oUsrTbl = $this->getCustomTable('user');
-        $minersFound = 0;
-        $fTotalHash = 0;
-
-        $oSetTbl = $this->getCustomTable('user_setting');
-
-        $sApiINfoHash = file_get_contents('https://api.nanopool.org/v1/rvn/avghashratelimited/RQMwgG6sY3aby48Hdo7MdQUHZUTUvACCcT/1');
-        $oApiDataHash = json_decode($sApiINfoHash);
-
-        $fTotalShares = 0;
-        $fTotalHash = $oApiDataHash->data;
-        $aMinersToPay = [];
-        if(isset($oApiData->data)) {
-            foreach($oApiData->data as $oW) {
-                $bIsFaucetMiner = stripos($oW->worker,'swissfaucetio');
-                if($bIsFaucetMiner === false) {
-                    # ignore
-                } else {
-                    $iUserID = substr($oW->worker,strlen('swissfaucetio'));
-                    $oMinerUser = false;
-                    try {
-                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
-                    } catch(\RuntimeException $e) {
-                        # user not found
-                    }
-                    if($oMinerUser) {
-                        $minersFound++;
-                        $iCurrentShares = $oW->shares;
-                        $fTotalShares+= $oW->shares;
-                        $oLastEntryWh = new Where();
-                        $oLastEntryWh->equalTo('user_idfs', $oMinerUser->getID());
-                        $oLastEntryWh->greaterThanOrEqualTo('date', date('Y-m-d H:i:s', strtotime('-50 minutes')));
-                        $oLastEntryWh->like('coin', 'rvn');
-
-                        $oLastSel = new Select($oMinerTbl->getTable());
-                        $oLastSel->where($oLastEntryWh);
-                        $oLastSel->order('date DESC');
-                        $oLastSel->limit(1);
-
-                        if($iCurrentShares < 0) {
-                            $iCurrentShares = 0;
-                        }
-
-                        $oLastEntry = $oMinerTbl->selectWith($oLastSel);
-                        if(count($oLastEntry) == 0) {
-                            $aMinersToPay[$oMinerUser->getID()] = $iCurrentShares;
-                        } else {
-                            echo 'miner shares already parsed within last 60 minutes - ignoring';
-                        }
-                    }
-                }
-            }
-        }
-
-        /**
-         *  $fCoins = round((float)($iCurrentShares/1000)*2000,2);
-        $oMinerTbl->insert([
-        'user_idfs' => $oMinerUser->getID(),
-        'rating' => $iCurrentShares,
-        'shares' => $iCurrentShares,
-        'amount_coin' => $fCoins,
-        'date' => date('Y-m-d H:i:s', time()),
-        'coin' => 'etc',
-        'pool' => 'nanopool',
-        ]);
-        echo 'miner added';
-         *
-         * if($fCoins > 0) {
-        $fCurrentBalance = $oUsrTbl->select(['User_ID' => $oMinerUser->getID()])->current()->token_balance;
-        $oUsrTbl->update([
-        'token_balance' => $fCurrentBalance+$fCoins,
-        ],'User_ID = '.$oMinerUser->getID());
-        }
-         */
-
-        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/rvn/approximated_earnings/'.$fTotalHash);
-        $earns = json_decode($sApiINfo);
-
-        $fTotalPay = $earns->data->hour->dollars*.8;
-        if($fTotalPay <= 0) {
-            echo "invalid amount ".$fTotalPay." - cancel batch - ".$fTotalHash;
-            return false;
-        }
-
-        foreach(array_keys($aMinersToPay) as $iMiner) {
-            $iShares = $aMinersToPay[$iMiner];
-            $myPerc = (100/($fTotalShares/$iShares)/100);
-            $myPayDollar = $fTotalPay*$myPerc;
-            $myPayCoin = round($myPayDollar*25000);
-
-            $oMinerTbl->insert([
-                'user_idfs' => $iMiner,
-                'rating' => $iShares,
-                'shares' => $iShares,
-                'amount_coin' => $myPayCoin,
+            $contestTbl->update([
                 'date' => date('Y-m-d H:i:s', time()),
-                'coin' => 'rvn',
-                'pool' => 'nanopool',
+                'stat-data' => json_encode($topList)
+            ],[
+                'stat-key' => 'congpu-'.date('m-Y', time()),
             ]);
-
-            if($myPayCoin > 0) {
-                $newBalance = $this->executeTransaction($myPayCoin, false, $iMiner, $iShares, 'rvn-nanoshares', ($myPerc*100).'% of all shares on pool. dollar val = '.$myPayDollar);
-            }
-            echo 'Miner '.$iMiner.' has '.($myPerc*100).'% of shares = '.$myPayCoin.' Coins @ $ '.$myPayDollar. ' - new balance = '.$newBalance;
-
         }
 
-        # update hashrates for users
-        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/rvn/avghashrateworkers/RQMwgG6sY3aby48Hdo7MdQUHZUTUvACCcT/1');
-        $workers = json_decode($sApiINfo);
 
-        if(isset($workers->data)) {
-            if(is_array($workers->data)) {
-                foreach($workers->data as $worker) {
-                    $userId = substr($worker->worker,strlen('swissfaucetio'));
-                    $oMinerUser = false;
-                    try {
-                        $oMinerUser = $this->oTableGateway->getSingle($userId);
-                    } catch(\RuntimeException $e) {
 
-                    }
+        $statsByUser = [];
+        $xmrShares = $statTbl->select(['stat_key' => 'nano-coin-m-xmr-'.date('m-Y',time())]);
+        foreach($xmrShares as $sh) {
+            if(!array_key_exists($sh->user_idfs,$statsByUser)) {
+                $statsByUser[$sh->user_idfs] = 0;
+            }
+            $statsByUser[$sh->user_idfs]+=$sh->stat_data;
+        }
 
-                    if($oMinerUser) {
-                        $oHrCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'gpuminer-currenthashrate']);
-                        if(count($oHrCheck) == 0) {
-                            $oSetTbl->insert([
-                                'user_idfs' => $userId,
-                                'setting_name' => 'gpuminer-currenthashrate',
-                                'setting_value' => $worker->hashrate
-                            ]);
-                        } else {
-                            $oSetTbl->update([
-                                'setting_value' => $worker->hashrate
-                            ], [
-                                'user_idfs' => $userId,
-                                'setting_name' => 'gpuminer-currenthashrate',
-                            ]);
-                        }
-                        $oHrTyCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'gpuminer-currentpool']);
-                        if(count($oHrTyCheck) == 0) {
-                            $oSetTbl->insert([
-                                'user_idfs' => $userId,
-                                'setting_name' => 'gpuminer-currentpool',
-                                'setting_value' => 'rvn'
-                            ]);
-                        } else {
-                            $oSetTbl->update([
-                                'setting_value' => 'rvn'
-                            ], [
-                                'user_idfs' => $userId,
-                                'setting_name' => 'gpuminer-currentpool',
-                            ]);
-                        }
-                    }
-                }
+        arsort($statsByUser);
+
+        $rank = 1;
+        $topList = [];
+        foreach(array_keys($statsByUser) as $top) {
+            echo $rank.': '.$top.' = '.$statsByUser[$top];
+            $topList[] = ['rank' => $rank,'id' => $top, 'coins' => round($statsByUser[$top],2)];
+            $rank++;
+            if($rank > 3) {
+                break;
             }
         }
 
-        echo 'done. Found '.$minersFound.' @ '.$fTotalHash.' MH/s - '.$fTotalShares.' shares = $ '.$earns->data->hour->dollars;
-
-        return false;
-        //
-    }
-
-    public function generateuserchattagsAction() {
-        $this->layout('layout/json');
-
-        $usrTbl = new TableGateway('user', CoreEntityController::$oDbAdapter);
-        $noTagUsers = $usrTbl->select();
-        foreach($noTagUsers as $usr) {
-            $usrBase = $usr->username;
-            $hasMail = stripos($usr->username,'@');
-            if($hasMail === false) {
-            } else {
-                $usrBase = explode('@', $usr->username)[0];
-            }
-            $tag = str_replace([
-                ' ','ö','ä','ü','@gmail.com','@yahoo.com','@mail.ru','@outlook.es','@hotmail.com','@ukr.net',
-                    '@outlook.com','Outlook.es','.com','@'
-                ],[
-                    '.','o','a','u','','','','','','','','','',''
-                ], substr($usrBase, 0, 100)).'#'.substr($usr->User_ID,strlen($usr->User_ID)-4);
-
-            $usrTbl->update([
-                'friend_tag' => $tag,
-            ],['User_ID' => $usr->User_ID]);
-        }
-
-        echo 'gen tags';
-
-        return false;
-    }
-
-    public function fetchxmrnanosharesAction()
-    {
-        $bCheck = true;
-        if(!isset($_REQUEST['authkey'])) {
-            $bCheck = false;
+        $rankEx = $contestTbl->select(['stat-key' => 'concpu-'.date('m-Y', time())]);
+        if($rankEx->count() == 0) {
+            $contestTbl->insert([
+                'stat-key' => 'concpu-'.date('m-Y', time()),
+                'date' => date('Y-m-d H:i:s', time()),
+                'stat-data' => json_encode($topList)
+            ]);
         } else {
-            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
-                $bCheck = false;
-            }
-        }
-
-        if(!$bCheck) {
-            return $this->redirect()->toRoute('home');
-        }
-        $this->layout('layout/json');
-
-        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/xmr/sharesperworker/45mYciovPc8GNWBuQaymPyGcNvubron5DeyVRNgMRAExHCumTDZXwnH657atftktRkEF4xD14wcFZTcCaWzo99wg317afGf/1');
-        $oApiData = json_decode($sApiINfo);
-
-        $oMinerTbl = $this->getCustomTable('faucet_miner');
-        $oUsrTbl = $this->getCustomTable('user');
-        $minersFound = 0;
-        $fTotalHash = 0;
-
-        $oSetTbl = $this->getCustomTable('user_setting');
-
-        $sApiINfoHash = file_get_contents('https://api.nanopool.org/v1/xmr/avghashratelimited/45mYciovPc8GNWBuQaymPyGcNvubron5DeyVRNgMRAExHCumTDZXwnH657atftktRkEF4xD14wcFZTcCaWzo99wg317afGf/1');
-        $oApiDataHash = json_decode($sApiINfoHash);
-
-        $fTotalShares = 0;
-        $fTotalHash = $oApiDataHash->data;
-        $aMinersToPay = [];
-        if(isset($oApiData->data)) {
-            foreach($oApiData->data as $oW) {
-                $bIsHackerAchiev = stripos($oW->worker,'hacker');
-                if($bIsHackerAchiev === false) {
-
-                } else {
-                    $iUserID = substr($oW->worker,strlen('hacker'));
-                    $oMinerUser = false;
-                    try {
-                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
-                    } catch(\RuntimeException $e) {
-                        # user not found
-                    }
-
-                    $this->batchAchievement($iUserID, 48);
-                }
-                $bIsFaucetMiner = stripos($oW->worker,'swissfaucetio');
-                if($bIsFaucetMiner === false) {
-                    # ignore
-                } else {
-                    $iUserID = substr($oW->worker,strlen('swissfaucetio'));
-                    $oMinerUser = false;
-                    try {
-                        $oMinerUser = $this->oTableGateway->getSingle($iUserID);
-                    } catch(\RuntimeException $e) {
-                        # user not found
-                    }
-                    if($oMinerUser) {
-                        $minersFound++;
-                        $iCurrentShares = $oW->shares;
-                        $fTotalShares+= $oW->shares;
-                        $oLastEntryWh = new Where();
-                        $oLastEntryWh->equalTo('user_idfs', $oMinerUser->getID());
-                        $oLastEntryWh->greaterThanOrEqualTo('date', date('Y-m-d H:i:s', strtotime('-50 minutes')));
-                        $oLastEntryWh->like('coin', 'xmr');
-
-                        $oLastSel = new Select($oMinerTbl->getTable());
-                        $oLastSel->where($oLastEntryWh);
-                        $oLastSel->order('date DESC');
-                        $oLastSel->limit(1);
-
-                        if($iCurrentShares < 0) {
-                            $iCurrentShares = 0;
-                        }
-
-                        $oLastEntry = $oMinerTbl->selectWith($oLastSel);
-                        if(count($oLastEntry) == 0) {
-                            $aMinersToPay[$oMinerUser->getID()] = $iCurrentShares;
-                        } else {
-                            echo 'miner shares already parsed within last 60 minutes - ignoring';
-                        }
-                    }
-                }
-            }
-        }
-
-        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/xmr/approximated_earnings/'.$fTotalHash);
-        $earns = json_decode($sApiINfo);
-
-        $fTotalPay = $earns->data->hour->dollars*.8;
-
-        foreach(array_keys($aMinersToPay) as $iMiner) {
-            $iShares = $aMinersToPay[$iMiner];
-            $myPerc = (100/($fTotalShares/$iShares)/100);
-            $myPayDollar = $fTotalPay*$myPerc;
-            $myPayCoin = round($myPayDollar*25000);
-
-            $oMinerTbl->insert([
-                'user_idfs' => $iMiner,
-                'rating' => $iShares,
-                'shares' => $iShares,
-                'amount_coin' => $myPayCoin,
+            $contestTbl->update([
                 'date' => date('Y-m-d H:i:s', time()),
-                'coin' => 'xmr',
-                'pool' => 'nanopool',
+                'stat-data' => json_encode($topList)
+            ],[
+                'stat-key' => 'concpu-'.date('m-Y', time()),
             ]);
-
-            if($myPayCoin > 0) {
-                $newBalance = $this->executeTransaction($myPayCoin, false, $iMiner, $iShares, 'xmr-nanoshares', ($myPerc*100).'% of all shares on pool. dollar val = '.$myPayDollar);
-            }
-            echo 'Miner '.$iMiner.' has '.($myPerc*100).'% of shares = '.$myPayCoin.' Coins @ $ '.$myPayDollar. ' - new balance = '.$newBalance;
-
         }
 
-        # update hashrates for users
-        $sApiINfo = file_get_contents('https://api.nanopool.org/v1/xmr/avghashrateworkers/45mYciovPc8GNWBuQaymPyGcNvubron5DeyVRNgMRAExHCumTDZXwnH657atftktRkEF4xD14wcFZTcCaWzo99wg317afGf/1');
-        $workers = json_decode($sApiINfo);
 
-        if(isset($workers->data)) {
-            if(is_array($workers->data)) {
-                foreach($workers->data as $worker) {
-                    $userId = substr($worker->worker,strlen('swissfaucetio'));
-                    $oMinerUser = false;
-                    try {
-                        $oMinerUser = $this->oTableGateway->getSingle($userId);
-                    } catch(\RuntimeException $e) {
 
-                    }
-
-                    if($oMinerUser) {
-                        $oHrCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'cpuminer-currenthashrate']);
-                        if(count($oHrCheck) == 0) {
-                            $oSetTbl->insert([
-                                'user_idfs' => $userId,
-                                'setting_name' => 'cpuminer-currenthashrate',
-                                'setting_value' => $worker->hashrate
-                            ]);
-                        } else {
-                            $oSetTbl->update([
-                                'setting_value' => $worker->hashrate
-                            ], [
-                                'user_idfs' => $userId,
-                                'setting_name' => 'cpuminer-currenthashrate',
-                            ]);
-                        }
-                        $oHrTyCheck = $oSetTbl->select(['user_idfs' => $userId,'setting_name' => 'cpuminer-currentpool']);
-                        if(count($oHrTyCheck) == 0) {
-                            $oSetTbl->insert([
-                                'user_idfs' => $userId,
-                                'setting_name' => 'cpuminer-currentpool',
-                                'setting_value' => 'xmr'
-                            ]);
-                        } else {
-                            $oSetTbl->update([
-                                'setting_value' => 'xmr'
-                            ], [
-                                'user_idfs' => $userId,
-                                'setting_name' => 'cpuminer-currentpool',
-                            ]);
-                        }
-                    }
-                }
-            }
-        }
-
-        # set hashrate to 0 for all miners gone
-        $aMinersActive = $oSetTbl->select(['setting_name' => 'cpuminer-currenthashrate']);
-        foreach($aMinersActive as $oActive) {
-            if($oActive->user_idfs == 0) {
+        $statsByUser = [];
+        $refCounts = $statTbl->select(['stat_key' => 'ref-count-'.date('m-Y',time())]);
+        foreach($refCounts as $sh) {
+            if($sh->user_idfs == 0 || $sh->user_idfs == 335875860 || $sh->user_idfs == 335877074) {
                 continue;
             }
-            if(!array_key_exists($oActive->user_idfs,$aMinersToPay)) {
-                $oSetTbl->update(['setting_value' => 0],
-                    [
-                        'user_idfs' => $oActive->user_idfs,
-                        'setting_name' => 'cpuminer-currenthashrate',
-                    ]
-                );
-                $oSetTbl->delete(
-                    [
-                        'user_idfs' => $oActive->user_idfs,
-                        'setting_name' => 'cpuminer-currentpool',
-                    ]
-                );
+            if(!array_key_exists($sh->user_idfs,$statsByUser)) {
+                $statsByUser[$sh->user_idfs] = 0;
+            }
+            $statsByUser[$sh->user_idfs]+=(int)$sh->stat_data;
+        }
+
+        arsort($statsByUser);
+        $rank = 1;
+        $topList = [];
+        foreach(array_keys($statsByUser) as $top) {
+            echo $rank.': '.$top.' = '.$statsByUser[$top];
+            $topList[] = ['rank' => $rank,'id' => $top, 'refs' => round($statsByUser[$top],2)];
+            $rank++;
+            if($rank > 3) {
+                break;
             }
         }
 
-
-        echo 'done. Found '.$minersFound.' @ '.$fTotalHash.' MH/s - '.$fTotalShares.' shares = $ '.$earns->data->hour->dollars;
+        $rankEx = $contestTbl->select(['stat-key' => 'conrefs-'.date('m-Y', time())]);
+        if($rankEx->count() == 0) {
+            $contestTbl->insert([
+                'stat-key' => 'conrefs-'.date('m-Y', time()),
+                'date' => date('Y-m-d H:i:s', time()),
+                'stat-data' => json_encode($topList)
+            ]);
+        } else {
+            $contestTbl->update([
+                'date' => date('Y-m-d H:i:s', time()),
+                'stat-data' => json_encode($topList)
+            ],[
+                'stat-key' => 'conrefs-'.date('m-Y', time()),
+            ]);
+        }
 
         return false;
-        //
     }
 
     public function startlotteryroundAction()
@@ -1834,94 +1390,6 @@ class BatchController extends CoreEntityController
         } else {
             $oStatsTbl->update([
                 'data' => json_encode($aAppMetrics),
-                'date' => date('Y-m-d H:i:s', $sTime),
-            ],$oCheckWh);
-        }
-
-        echo 'done';
-
-        return false;
-    }
-
-    public function gamestatsAction()
-    {
-        $bCheck = true;
-        if(!isset($_REQUEST['authkey'])) {
-            $bCheck = false;
-        } else {
-            if($_REQUEST['authkey'] != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
-                $bCheck = false;
-            }
-        }
-
-        if(!$bCheck) {
-            return $this->redirect()->toRoute('home');
-        }
-        $this->layout('layout/json');
-
-        $oTransTbl = $this->getCustomtable('faucet_game_match');
-
-        $oTodayWh = new Where();
-        $oTodayWh->like('date_matched', date('Y-m-d', time()).'%');
-        $oTodayTrans = $oTransTbl->select($oTodayWh);
-        $iTotalOut = 0;
-        $iTotalIn = 0;
-        $iTotalTrans = 0;
-        $aAmountByType = [];
-        $iHostWin = 0;
-        $iHostLose = 0;
-        $iClientWin = 0;
-        $iClientLose = 0;
-        $iEven = 0;
-        foreach($oTodayTrans as $oT) {
-            $iTotalTrans++;
-            $iTotalIn+=$oT->amount_bet;
-            if(!array_key_exists($oT->client_user_idfs,$aAmountByType)) {
-                $aAmountByType[$oT->client_user_idfs] = true;
-            }
-            if(!array_key_exists($oT->host_user_idfs,$aAmountByType)) {
-                $aAmountByType[$oT->host_user_idfs] = true;
-            }
-            if($oT->winner_idfs == 0) {
-                $iEven++;
-            } elseif($oT->winner_idfs == $oT->host_user_idfs) {
-                $iHostWin++;
-                $iClientLose++;
-            } else {
-                $iClientWin++;
-                $iHostLose++;
-            }
-        }
-
-        $aMetrics = [
-            'iTotalTrans' => $iTotalTrans,
-            'iTotalIn' => $iTotalIn,
-            'iPlayers' => count($aAmountByType),
-            'iEven' => $iEven,
-            'iClientLose' => $iClientLose,
-            'iClientWin' => $iClientWin,
-            'iHostWin' => $iHostWin,
-            'iHostLose' => $iHostLose,
-        ];
-
-        $sTime = time();
-
-        $oStatsTbl = new TableGateway('core_statistic', CoreEntityController::$oDbAdapter);
-
-        $oCheckWh = new Where();
-        $oCheckWh->like('stats_key', 'gamemetrics-daily');
-        $oCheckWh->like('date', date('Y-m-d', $sTime).'%');
-        $oStatsCheck = $oStatsTbl->select($oCheckWh);
-
-        if(count($oStatsCheck) == 0) {
-            $oStatsTbl->insert([
-                'stats_key' => 'gamemetrics-daily',
-                'date' => date('Y-m-d H:i:s',$sTime),
-                'data' => json_encode($aMetrics),
-            ]);
-        } else {
-            $oStatsTbl->update([
-                'data' => json_encode($aMetrics),
                 'date' => date('Y-m-d H:i:s', $sTime),
             ],$oCheckWh);
         }
@@ -2667,63 +2135,6 @@ class BatchController extends CoreEntityController
                 $this->batchAchievement($userId, 14);
             }
             $this->updateUserSetting($userId, 'totalearned-coins', json_encode($withdrawsByUser[$userId]['c']));
-        }
-
-        echo "\n".'done';
-
-        return false;
-    }
-
-    public function checkshortlinkachievsAction()
-    {
-        $bCheck = true;
-        if (!isset($_REQUEST['authkey'])) {
-            $bCheck = false;
-        } else {
-            $authKey = filter_var($_REQUEST['authkey'], FILTER_SANITIZE_STRING);
-            if ($authKey != CoreEntityController::$aGlobalSettings['batch-serverkey']) {
-                $bCheck = false;
-            }
-        }
-
-        if (!$bCheck) {
-            return $this->redirect()->toRoute('home');
-        }
-        $this->layout('layout/json');
-
-        $claimTbl = new TableGateway('shortlink_link_user', CoreEntityController::$oDbAdapter);
-
-        $withdrawsByUser = [];
-        $linksDoneThisMonth = [];
-        $oWh = new Where();
-        $oWh->notLike('date_completed', '0000-00-00 00:00:00');
-        $claimSel = new Select($claimTbl->getTable());
-        $claimSel->order('date_claimed ASC');
-        $claimSel->where($oWh);
-        $claimsDone = $claimTbl->selectWith($claimSel);
-        foreach($claimsDone as $claim) {
-            if(!array_key_exists($claim->user_idfs, $withdrawsByUser)) {
-                $withdrawsByUser[$claim->user_idfs] = ['c' => 0];
-            }
-            $withdrawsByUser[$claim->user_idfs]['c']++;
-
-            if(strtotime($claim->date_claimed) >= strtotime("first day of this month")) {
-                if(!array_key_exists($claim->user_idfs, $linksDoneThisMonth)) {
-                    $linksDoneThisMonth[$claim->user_idfs] = ['c' => 0];
-                }
-                $linksDoneThisMonth[$claim->user_idfs]['c']++;
-            }
-        }
-
-        echo "Parsing Shortlinks of ".count($withdrawsByUser)." Users";
-        echo "\nParsing Shortlinks of ".count($linksDoneThisMonth)." Users (this month)";
-
-        foreach(array_keys($withdrawsByUser) as $userId) {
-            $this->updateUserSetting($userId, 'shortlinks-total', json_encode($withdrawsByUser[$userId]['c']));
-        }
-
-        foreach(array_keys($linksDoneThisMonth) as $userId) {
-            $this->updateUserSetting($userId, 'shortlinks-month', json_encode($linksDoneThisMonth[$userId]['c']));
         }
 
         echo "\n".'done';
